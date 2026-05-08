@@ -288,7 +288,11 @@ export function useSensors(localeComputed) {
         resetLogsProgress();
         const cleanLogs = sanitizeSensorLogsPmSentinels(currentLogs);
         const ownerSensorsWithData = getOwnerSensorsWithData(sensorId);
-        sensorPoint.value = { ...sensorPoint.value, logs: cleanLogs, ownerSensorsWithData };
+        sensorPoint.value = {
+          ...sensorPoint.value,
+          logs: cleanLogs,
+          ...(ownerSensorsWithData !== null ? { ownerSensorsWithData } : null),
+        };
         {
           const existsOnMap = sensors.value?.some((s) => s?.sensor_id === sensorId);
           if (existsOnMap) setSensorData(sensorId, { logs: cleanLogs });
@@ -404,7 +408,11 @@ export function useSensors(localeComputed) {
         // Данные загружены (даже если пустой массив); -1 в PM = «нет данных»
         const cleanLogs = sanitizeSensorLogsPmSentinels(logArray);
         const ownerSensorsWithData = getOwnerSensorsWithData(sensorId);
-        sensorPoint.value = { ...sensorPoint.value, logs: cleanLogs, ownerSensorsWithData };
+        sensorPoint.value = {
+          ...sensorPoint.value,
+          logs: cleanLogs,
+          ...(ownerSensorsWithData !== null ? { ownerSensorsWithData } : null),
+        };
 
         // Сохраняем логи
         {
@@ -613,7 +621,9 @@ export function useSensors(localeComputed) {
         preloadSensorMeta(sid, start, end).then(() => {
           if (!isSensorOpen(sid)) return;
           const ownerSensorsWithData = getOwnerSensorsWithData(sid);
-          sensorPoint.value = { ...sensorPoint.value, ownerSensorsWithData };
+          if (ownerSensorsWithData !== null) {
+            sensorPoint.value = { ...sensorPoint.value, ownerSensorsWithData };
+          }
         });
       }
 

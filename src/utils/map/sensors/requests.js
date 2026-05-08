@@ -72,8 +72,6 @@ function dedupeByOwnerProximity(list, maxKm = OWNER_GEO_CLUSTER_KM) {
     }
     for (const c of clusters) {
       // Pick a stable representative for this owner+geo cluster.
-      // Previously we used the first item, which could hide an actively-updating sensor_id
-      // even though it exists in the endpoint response.
       let best = c.members[0] || null;
       let bestTs = Number(best?.timestamp || 0);
       for (const m of c.members) {
@@ -321,6 +319,9 @@ export function classifySensorTypeFromLogSamples(samples) {
 export function getOwnerSensorsWithData(sensorId) {
   if (!sensorId) return [];
   const meta = latestSensorMetaById.get(sensorId);
+  // Meta may not be loaded yet (async preload). Return null so callers can
+  // keep previous UI options instead of overwriting with an empty list.
+  if (!meta) return null;
   const sensors = Array.isArray(meta?.sensors) ? meta.sensors : [];
   const data = meta?.data && typeof meta.data === "object" ? meta.data : {};
 
