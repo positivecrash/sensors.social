@@ -110,6 +110,7 @@ import { useMap } from "@/composables/useMap";
 import { useSensors } from "@/composables/useSensors";
 import { classifySensorTypeFromLogSamples } from "@/utils/map/sensors/requests";
 import { dayISO } from "../../../utils/date";
+import { isPointNearby } from "../../../utils/utils";
 
 import diyIcon from "@/assets/images/sensorTypes/DIY.svg";
 import insightIcon from "@/assets/images/sensorTypes/Insight.svg";
@@ -135,13 +136,24 @@ const ownerSensorOptions = computed(() => {
   const list = props.point?.ownerSensorsWithData;
   // Daily recap: show only sensors that actually have data.
   const arr = Array.isArray(list) ? list.filter(Boolean) : [];
-  return arr.filter((o) => o.hasData === true);
+  return arr.filter((o) => {
+    if (o.hasData === true && isPointNearby(o.geo, props.point.geo, 10)) {
+      return o;
+    }
+  });
+  // return arr.filter((o) => o.hasData === true);
 });
 
 const labeledOwnerOptions = computed(() => {
   const opts = ownerSensorOptions.value;
   const counts = { insight: 0, urban: 0, altruist: 0, diy: 0 };
   const out = [];
+  const formatSensorIdShort = (id) => {
+    const s = String(id || "");
+    if (!s) return "";
+    if (s.length <= 14) return s;
+    return `${s.slice(0, 6)}…${s.slice(-6)}`;
+  };
   for (const o of opts) {
     const hasData = o?.hasData === true;
     if (!hasData) continue;
@@ -167,7 +179,15 @@ const labeledOwnerOptions = computed(() => {
         : type === "diy"
         ? diyIcon
         : altruistIcon;
-    if (o?.id) out.push({ id: o.id, type, hasData: true, icon, label: `${labelBase} #${n}` });
+    if (o?.id) {
+      out.push({
+        id: o.id,
+        type,
+        hasData: true,
+        icon,
+        label: `${labelBase} #${n} (${formatSensorIdShort(o.id)})`,
+      });
+    }
   }
   return out;
 });
@@ -179,7 +199,9 @@ const activeFallbackOption = computed(() => {
   if (!t) return null;
   const icon = t === "insight" ? insightIcon : t === "urban" ? urbanIcon : altruistIcon;
   const labelBase = t === "insight" ? "Insight" : t === "urban" ? "Urban" : "Altruist";
-  return { id: sid, type: t, hasData: true, icon, label: `${labelBase} (active)` };
+  const s = String(sid);
+  const shortId = s.length <= 14 ? s : `${s.slice(0, 6)}…${s.slice(-6)}`;
+  return { id: sid, type: t, hasData: true, icon, label: `${labelBase} (${shortId}) (active)` };
 });
 
 const selectedOwnerSensorId = computed(() => {

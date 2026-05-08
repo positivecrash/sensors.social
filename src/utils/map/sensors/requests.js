@@ -284,7 +284,8 @@ export function getOwnerSensorsWithData(sensorId) {
   return sensors.map((id) => {
     const points = Array.isArray(data?.[id]) ? data[id] : [];
     const hasData = Array.isArray(points) && points.length > 0;
-    return { id, hasData, type: hasData ? classifySensorTypeFromLogSamples(points) : null };
+    const geo = hasData ? points[points.length - 1].geo : '';
+    return { id, hasData, type: hasData ? classifySensorTypeFromLogSamples(points) : null, geo};
   });
 }
 

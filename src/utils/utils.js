@@ -149,3 +149,56 @@ function buildAddressFromAny(json) {
   if (json && json.address) return buildFromNominatim(json);
   return { country: "", address: [], postcode: "" };
 }
+
+/**
+ * Calculates distance between two geographic points using the Haversine formula.
+ * Returns distance in kilometers.
+ *
+ * @param {Object} a - First geographic point
+ * @param {number} a.lat - Latitude of first point
+ * @param {number} a.lng - Longitude of first point
+ *
+ * @param {Object} b - Second geographic point
+ * @param {number} b.lat - Latitude of second point
+ * @param {number} b.lng - Longitude of second point
+ *
+ * @returns {number} Distance between points in kilometers
+ */
+function distanceKm(a, b) {
+  const R = 6371; // Earth radius in km
+
+  const toRad = (deg) => deg * Math.PI / 180;
+
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) *
+      Math.cos(lat2) *
+      Math.sin(dLng / 2) ** 2;
+
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+/**
+ * Checks whether two geographic points are within a given distance.
+ *
+ * @param {Object} a - First geographic point
+ * @param {number} a.lat - Latitude of first point
+ * @param {number} a.lng - Longitude of first point
+ *
+ * @param {Object} b - Second geographic point
+ * @param {number} b.lat - Latitude of second point
+ * @param {number} b.lng - Longitude of second point
+ *
+ * @param {number} [maxDistanceKm=10] - Maximum allowed distance in kilometers
+ *
+ * @returns {boolean} True if points are within specified distance
+ */
+export function isPointNearby(a, b, maxDistanceKm = 10) {
+  return distanceKm(a, b) <= maxDistanceKm;
+}
