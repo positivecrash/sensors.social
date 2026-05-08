@@ -137,7 +137,7 @@ const ownerSensorOptions = computed(() => {
   // Daily recap: show only sensors that actually have data.
   const arr = Array.isArray(list) ? list.filter(Boolean) : [];
   return arr.filter((o) => {
-    if (o.hasData === true && isPointNearby(o.geo, props.point.geo, 10)) {
+    if (o.hasData === true && isPointNearby(o.geo, props.point.geo, 5)) {
       return o;
     }
   });

@@ -44,11 +44,17 @@ import MessagePopup from "../components/message/Index.vue";
 import MetaInfo from "../components/MetaInfo.vue";
 
 import { settings } from "@config";
-import { unsubscribeRealtime, initProvider } from "../utils/map/sensors/requests";
+import {
+  unsubscribeRealtime,
+  initProvider,
+  getSensorMetaFromPeriod,
+  OWNER_GEO_CLUSTER_KM,
+  haversineKm,
+} from "../utils/map/sensors/requests";
 import { hasValidCoordinates } from "../utils/utils";
 import { useSensors } from "../composables/useSensors";
 import { useMessages } from "../composables/useMessages";
-import { dayISO } from "@/utils/date";
+import { dayISO, getPeriodBounds } from "@/utils/date";
 
 const mapState = useMap();
 const router = useRouter();
@@ -310,7 +316,51 @@ watch(
       }
 
       sensorsUI.loadSensors().then(async () => {
+        const ensureSensorVisibleInRemoteBundle = async (sensorId) => {
+          const sid = sensorId ? String(sensorId) : "";
+          if (!sid || mapState.currentProvider.value !== "remote") return;
+
+          const mode = mapState.timelineMode.value || "day";
+          const { start, end } = getPeriodBounds(mapState.currentDate.value, mode);
+          const meta = await getSensorMetaFromPeriod(sid, start, end);
+          if (!meta || !hasValidCoordinates(meta.geo)) return;
+
+          const currentList = Array.isArray(sensorsUI.sensors?.value)
+            ? sensorsUI.sensors.value
+            : Array.isArray(sensorsUI.sensors)
+              ? sensorsUI.sensors
+              : [];
+
+          if (currentList.some((s) => String(s?.sensor_id || "") === sid)) return;
+
+          const owner = meta?.owner ? String(meta.owner) : "";
+          if (!owner) {
+            sensorsUI.setSensors([...currentList, meta]);
+            return;
+          }
+
+          const next = [...currentList];
+          let replaced = false;
+          for (let i = 0; i < next.length; i += 1) {
+            const cur = next[i];
+            if (!cur) continue;
+            if (String(cur?.owner || "") !== owner) continue;
+            const dist = haversineKm(meta.geo, cur.geo);
+            if (dist <= OWNER_GEO_CLUSTER_KM) {
+              next[i] = meta;
+              replaced = true;
+              break;
+            }
+          }
+          if (!replaced) next.push(meta);
+          sensorsUI.setSensors(next);
+        };
+
         if (mapState.currentProvider.value === "remote") {
+          // If the URL targets a concrete sensor_id, ensure it's not hidden by owner-bundling.
+          if (route.query.sensor) {
+            await ensureSensorVisibleInRemoteBundle(route.query.sensor);
+          }
           // Для realtime маркеры обновляются по мере прихода данных
           await sensorsUI.updateSensorMaxData();
           sensorsUI.updateSensorMarkers();

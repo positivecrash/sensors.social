@@ -15,10 +15,10 @@ let providerObj = null;
 // Cache latest v2 meta for a sensor to drive UI (owner sensors dropdown, etc.)
 const latestSensorMetaById = new Map();
 
-/** Max distance (km) between urban points of the same owner to share one map marker. */
-const OWNER_GEO_CLUSTER_KM = 100;
+/** Max distance (km) between points of the same owner to share one map marker. */
+export const OWNER_GEO_CLUSTER_KM = 5;
 
-function haversineKm(geoA, geoB) {
+export function haversineKm(geoA, geoB) {
   const lat1 = Number(geoA?.lat);
   const lng1 = Number(geoA?.lng);
   const lat2 = Number(geoB?.lat);
@@ -71,7 +71,19 @@ function dedupeByOwnerProximity(list, maxKm = OWNER_GEO_CLUSTER_KM) {
       }
     }
     for (const c of clusters) {
-      out.push(c.members[0]);
+      // Pick a stable representative for this owner+geo cluster.
+      // Previously we used the first item, which could hide an actively-updating sensor_id
+      // even though it exists in the endpoint response.
+      let best = c.members[0] || null;
+      let bestTs = Number(best?.timestamp || 0);
+      for (const m of c.members) {
+        const ts = Number(m?.timestamp || 0);
+        if (Number.isFinite(ts) && ts > bestTs) {
+          best = m;
+          bestTs = ts;
+        }
+      }
+      out.push(best);
     }
   }
 
@@ -196,6 +208,37 @@ export async function getSensors(start, end, provider = "remote") {
       sensors: filterByBounds(ownerDedupedSensors, bounds),
       sensorsNoLocation: filterByBounds(ownerDedupedSensorsNoLocation, bounds),
     };
+  }
+}
+
+/**
+ * Fetch a single sensor "meta" row (geo/model/owner/timestamp) from the v2 period list.
+ * Useful when a sensor is bundled away by owner-dedupe, but the UI needs to force-show it.
+ */
+export async function getSensorMetaFromPeriod(sensorId, start, end) {
+  if (!sensorId) return null;
+  const target = String(sensorId);
+  try {
+    const historyData = await REMOTE_PROVIDER.getSensorsForPeriod(start, end);
+    if (!Array.isArray(historyData)) return null;
+    const sensorData = historyData.find((s) => String(s?.sensor_id || "") === target);
+    if (!sensorData || !sensorData.sensor_id || !sensorData.geo) return null;
+
+    const lat = parseFloat(sensorData.geo.lat);
+    const lng = parseFloat(sensorData.geo.lng);
+
+    return {
+      sensor_id: String(sensorData.sensor_id),
+      model: sensorData.model || 2,
+      geo: { lat, lng },
+      address: sensorData.address || null,
+      donated_by: sensorData.donated_by || null,
+      owner: sensorData.owner || sensorData.donated_by || null,
+      timestamp: sensorData.timestamp || null,
+    };
+  } catch (error) {
+    console.warn("Failed to load sensor meta from period:", error);
+    return null;
   }
 }
 
