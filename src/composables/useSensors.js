@@ -18,6 +18,8 @@ import {
   getOwnerSensorsWithData,
   preloadSensorMeta,
   classifySensorTypeFromLogSamples,
+  haversineKm,
+  OWNER_GEO_CLUSTER_KM,
 } from "../utils/map/sensors/requests";
 import { getAddress, hasValidCoordinates } from "../utils/utils";
 import { dayISO, dayBoundsUnix, getPeriodBounds } from "@/utils/date";
@@ -743,42 +745,52 @@ export function useSensors(localeComputed) {
 
     const CONCURRENCY = 20;
 
-    const computeMaxCo2FromMeta = (meta) => {
+    /**
+     * Max CO2 for a map marker: own sensor logs + only bundle siblings within owner geo cluster.
+     * Avoids coloring Urban markers with CO2 from the same owner in a different city.
+     */
+    const computeMaxCo2ForSensor = (meta, sensorId, sensorGeo) => {
       const data = meta?.data && typeof meta.data === "object" ? meta.data : null;
-
       if (!data) return null;
 
-      let max = null;
+      const baseLat = Number(sensorGeo?.lat);
+      const baseLng = Number(sensorGeo?.lng);
+      const hasBaseGeo = Number.isFinite(baseLat) && Number.isFinite(baseLng);
 
-      for (const points of Object.values(data)) {
-        if (!Array.isArray(points)) continue;
-
+      const considerPoints = (points, requireNearby) => {
+        if (!Array.isArray(points)) return null;
+        let max = null;
         for (const item of points) {
           const n = Number(item?.data?.co2);
-
           if (!Number.isFinite(n)) continue;
-
-          if (max === null || n > max) {
-            max = n;
+          if (requireNearby && hasBaseGeo) {
+            const geo = item?.geo;
+            if (!geo || haversineKm({ lat: baseLat, lng: baseLng }, geo) > OWNER_GEO_CLUSTER_KM) {
+              continue;
+            }
           }
+          if (max === null || n > max) max = n;
+        }
+        return max;
+      };
+
+      const sid = String(sensorId || "");
+      let max = considerPoints(data[sid], false);
+
+      const bundleIds = Array.isArray(meta?.sensors) ? meta.sensors : Object.keys(data);
+      for (const id of bundleIds) {
+        if (String(id) === sid) continue;
+        if (!hasBaseGeo) continue;
+        const siblingMax = considerPoints(data[id], true);
+        if (siblingMax !== null && (max === null || siblingMax > max)) {
+          max = siblingMax;
         }
       }
 
       return max;
     };
 
-    const shouldHydrate = (sensor) => {
-      if (!sensor?.sensor_id) return false;
-
-      const existing = sensor?.maxdata?.co2;
-
-      // already hydrated
-      if (existing !== null && existing !== undefined && Number.isFinite(Number(existing))) {
-        return false;
-      }
-
-      return !!sensor.owner;
-    };
+    const shouldHydrate = (sensor) => !!sensor?.sensor_id && !!sensor.owner;
 
     /**
      * owner -> sensors[]
@@ -819,15 +831,17 @@ export function useSensors(localeComputed) {
       try {
         const meta = await preloadSensorMeta(representativeSensorId, start, end);
 
-        const maxCo2 = computeMaxCo2FromMeta(meta);
-
-        if (maxCo2 === null) return;
-
-        // apply to ALL owner sensors
         for (const sensor of ownerSensors) {
+          const maxCo2 = computeMaxCo2ForSensor(meta, sensor.sensor_id, sensor.geo);
           sensor.maxdata ||= {};
+          if (maxCo2 === null) {
+            if (sensor.maxdata.co2 !== undefined) {
+              delete sensor.maxdata.co2;
+              updateSensorMarker(sensor);
+            }
+            continue;
+          }
           sensor.maxdata.co2 = maxCo2;
-
           updateSensorMarker(sensor);
         }
       } catch (e) {
