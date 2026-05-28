@@ -39,6 +39,9 @@ function upsertMarker(point, colors, sensor_id = null) {
 
   // Если маркер существует, обновляем его
   if (existingMarker) {
+    const ctx = getMapContext();
+    const spiderfyOpen = Boolean(ctx?.markersLayer?.__spiderfyOpen);
+
     // Проверяем, был ли маркер активным
     const wasActive = existingMarker.getElement()?.classList.contains(MARKER_CLASSES.active);
 
@@ -46,17 +49,38 @@ function upsertMarker(point, colors, sensor_id = null) {
     existingMarker.options.data = point;
 
     // Обновляем иконку
-    existingMarker.setIcon(
-      icons.createIconPoint({
-        image: point.iconLocal,
-        colors: colors,
-        isBookmarked: point.isBookmarked,
-        id: point.sensor_id,
-      })
-    );
+    // Important: while a cluster is spiderfied, avoid calling `setIcon()` on child markers.
+    // Markercluster treats icon changes as a reason to recalculate clusters, which can
+    // collapse the spiderfy "web" after a short delay.
+    if (!spiderfyOpen) {
+      existingMarker.setIcon(
+        icons.createIconPoint({
+          image: point.iconLocal,
+          colors: colors,
+          isBookmarked: point.isBookmarked,
+          id: point.sensor_id,
+        })
+      );
+    }
 
     // Применяем вычисленные координаты
-    existingMarker.setLatLng(new L.LatLng(coord[0], coord[1]));
+    // Important: avoid forcing recluster/unspiderfy on every data tick.
+    try {
+      const prev = existingMarker.getLatLng?.();
+      const nextLat = Number(coord[0]);
+      const nextLng = Number(coord[1]);
+      const same =
+        prev &&
+        Number.isFinite(nextLat) &&
+        Number.isFinite(nextLng) &&
+        Math.abs(prev.lat - nextLat) < 1e-10 &&
+        Math.abs(prev.lng - nextLng) < 1e-10;
+      if (!same) {
+        existingMarker.setLatLng(new L.LatLng(nextLat, nextLng));
+      }
+    } catch {
+      existingMarker.setLatLng(new L.LatLng(coord[0], coord[1]));
+    }
 
     // Восстанавливаем активный класс если маркер был активным
     if (wasActive) {
@@ -184,6 +208,8 @@ export function switchMessagesLayer(map, enabled = false) {
 export function refreshClusters() {
   const ctx = getMapContext();
   if (ctx.markersLayer) {
+    // If a cluster is currently spiderfied, refreshing clusters collapses the web.
+    if (ctx.markersLayer.__spiderfyOpen) return;
     ctx.markersLayer.refreshClusters();
   }
 }

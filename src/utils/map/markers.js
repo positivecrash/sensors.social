@@ -108,12 +108,12 @@ export function createClusterGroup(iconCreateFn, unit = null) {
     spiderfyOnEveryZoom: false,
     spiderfyOnMaxZoom: true,
     spiderfyDistanceMultiplier: 1.8,
-    zoomToBoundsOnClick: false, // we implement custom click handling
-    spiderfyOnClick: false, // we handle spiderfy manually
-    chunkedLoading: true, // performance boost for many markers
-    chunkDelay: 30,
-    chunkInterval: 200,
-    removeOutsideVisibleBounds: true,
+    zoomToBoundsOnClick: false, // custom click handling (stable UX)
+    spiderfyOnClick: false, // custom click handling
+    chunkedLoading: false,
+    animateAddingMarkers: false,
+    // Important: keep spiderfied child markers visible.
+    removeOutsideVisibleBounds: false,
     iconCreateFunction: (cluster) => iconCreateFn(cluster, unit),
   });
 
@@ -172,36 +172,58 @@ export function attachClusterEvents(layer, clickHandler) {
   layer.on("clusterclick", (e) => {
     const cluster = e.layer;
     const childCount = cluster.getChildCount();
+
+    e.originalEvent?.preventDefault?.();
+    e.originalEvent?.stopPropagation?.();
+
     const nowZoom = map.getZoom();
     const targetZoom = map.getBoundsZoom(cluster.getBounds(), true);
 
-    // если много детей или далеко - зуммируем
-    if (childCount > 15 || targetZoom - nowZoom > 2) {
-      e.originalEvent?.preventDefault?.();
-      e.originalEvent?.stopPropagation?.();
+    const maxZoomCap =
+      childCount <= 2 ? 17 : childCount <= 4 ? 16 : childCount <= 10 ? 17 : 18;
 
+    const shouldZoom = Math.min(targetZoom, maxZoomCap) > nowZoom;
+    if (shouldZoom) {
       map.fitBounds(cluster.getBounds(), {
         padding: [20, 20],
         animate: true,
-        maxZoom: Math.min(targetZoom, 18),
+        maxZoom: maxZoomCap,
       });
-    } else {
-      // Иначе просто spiderfy
-      try {
-        cluster.spiderfy();
-      } catch (error) {
-        console.warn("Spiderfy failed:", error);
-      }
+
+      map.once("zoomend", () => {
+        if (map.getZoom() >= maxZoomCap) {
+          try {
+            cluster.spiderfy();
+          } catch {
+            // ignore
+          }
+        }
+      });
+      return;
+    }
+
+    // Already zoomed in enough: spiderfy to separate overlapping points.
+    try {
+      cluster.spiderfy();
+    } catch {
+      // ignore
     }
   });
 
   // Обработка spiderfied события
   layer.on("spiderfied", (e) => {
+    // Mark layer as "spiderfy open" so background refreshes don't collapse it.
+    layer.__spiderfyOpen = true;
     if (Array.isArray(e.markers)) {
       e.markers.forEach((marker) => {
         attachMarkerEvents(marker, clickHandler);
       });
     }
+  });
+
+  // When spiderfy is closed (by user click/zoom), allow refreshes again.
+  layer.on("unspiderfied", () => {
+    layer.__spiderfyOpen = false;
   });
 }
 
