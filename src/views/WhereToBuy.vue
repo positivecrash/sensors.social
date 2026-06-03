@@ -64,6 +64,17 @@ const { t } = useI18n();
 
 const shops = computed(() => [
   {
+    id: "worldwide",
+    regionLabel: t("Worldwide"),
+    comingSoon: false,
+    tone: "primary",
+    href: "https://cyberpunks.shop/",
+    logo: cyberpunksShopLogo,
+    logoAlt: t("Cyberpunks Shop"),
+    title: t("Cyberpunks Shop"),
+    description: t("Our online-shop with various options available. Worldwide delivery."),
+  },
+  {
     id: "cyprus",
     regionLabel: t("CY"),
     comingSoon: false,
@@ -84,17 +95,6 @@ const shops = computed(() => [
     logoAlt: t("Yandex Market"),
     title: t("Yandex Market"),
     description: t("Various options of buying Altruist: Urban only, Urban & Insight, etc."),
-  },
-  {
-    id: "worldwide",
-    regionLabel: t("Worldwide"),
-    comingSoon: true,
-    tone: "neutral",
-    href: null,
-    logo: cyberpunksShopLogo,
-    logoAlt: t("Cyberpunks Shop"),
-    title: t("Cyberpunks Shop"),
-    description: t("Our online-shop with various options available. Worldwide delivery."),
   },
   {
     id: "europe",

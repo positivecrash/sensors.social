@@ -6,8 +6,8 @@
       "/dns4/3.pubsub.aira.life/tcp/443/wss/ipfs/QmWZSKTEQQ985mnNzMqhGCrwQ1aTA6sxVsorsycQz9cQrw"
     ]
   },
-  "REMOTE_PROVIDER": "https://roseman.airalab.org/",
-  "WIND_PROVIDER": "https://wind.airalab.org/latest",
+  "REMOTE_PROVIDER": "https://roseman.robonomics.network/",
+  "WIND_PROVIDER": "https://wind.sensors.social/latest",
   "MAP": {
     "zoom": "3",
     "position": {
