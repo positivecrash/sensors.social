@@ -1,12 +1,15 @@
 <template>
-  <!-- <div class="maintenance-banner">
+  <div class="maintenance-banner">
     <a
-      href=""
+      href="https://cyberpunks.shop/"
       target="_blank"
       rel="noopener noreferrer"
       class="maintenance-banner-link"
-    ></a>
-  </div> -->
+    >
+      <img alt="" src="@/assets/images/cyberpunks-shop-logo.webp" class="maintenance-banner-img-centered" />
+      Get your sensor on the map. Track your local environment.
+    </a>
+  </div>
   <RouterView />
   <notifications :classes="['notify', 'vue-notification']" />
 </template>
@@ -149,9 +152,15 @@ onMounted(async () => {
 }
 
 .maintenance-banner-link:hover {
-  opacity: 0.9;
-  text-decoration: underline;
+  /* opacity: 0.9;
+  text-decoration: underline; */
   color: var(--color-light);
+}
+
+.maintenance-banner-img-centered {
+  display: block;
+  max-width: 50px;
+  margin: 0 auto 10px;
 }
 
 @media screen and (max-width: 600px) {
