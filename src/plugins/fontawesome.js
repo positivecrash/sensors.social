@@ -1,5 +1,6 @@
 import { library } from "@fortawesome/fontawesome-svg-core";
 import {
+  faArrowRight,
   faBars,
   faBookmark as faBookmarkSolid,
   faBoltLightning,
@@ -68,6 +69,7 @@ import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
 import { faCreditCard } from "@fortawesome/free-regular-svg-icons";
 
 library.add(
+  faArrowRight,
   faBars,
   faBookmarkSolid,
   faBookmarkRegular,
