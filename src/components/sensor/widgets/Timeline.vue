@@ -148,6 +148,7 @@ const labeledOwnerOptions = computed(() => {
   const opts = ownerSensorOptions.value;
   const counts = { insight: 0, urban: 0, altruist: 0, diy: 0 };
   const out = [];
+  const activeId = currentSensorId.value;
   const formatSensorIdShort = (id) => {
     const s = String(id || "");
     if (!s) return "";
@@ -180,12 +181,13 @@ const labeledOwnerOptions = computed(() => {
         ? diyIcon
         : altruistIcon;
     if (o?.id) {
+      const isActive = String(o.id) === String(activeId);
       out.push({
         id: o.id,
         type,
         hasData: true,
         icon,
-        label: `${labelBase} #${n} (${formatSensorIdShort(o.id)})`,
+        label: `${labelBase} #${n} (${formatSensorIdShort(o.id)})${isActive ? " (active)" : ""}`,
       });
     }
   }
@@ -195,10 +197,25 @@ const labeledOwnerOptions = computed(() => {
 const activeFallbackOption = computed(() => {
   const sid = currentSensorId.value;
   if (!sid) return null;
-  const t = classifySensorTypeFromLogSamples(props.log);
-  if (!t) return null;
-  const icon = t === "insight" ? insightIcon : t === "urban" ? urbanIcon : altruistIcon;
-  const labelBase = t === "insight" ? "Insight" : t === "urban" ? "Urban" : "Altruist";
+  const t = classifySensorTypeFromLogSamples(props.log) || null;
+  const icon =
+    t === "insight"
+      ? insightIcon
+      : t === "urban"
+      ? urbanIcon
+      : t === "diy"
+      ? diyIcon
+      : altruistIcon;
+  const labelBase =
+    t === "insight"
+      ? "Insight"
+      : t === "urban"
+      ? "Urban"
+      : t === "diy"
+      ? "DIY"
+      : t === "altruist"
+      ? "Altruist"
+      : "Sensor";
   const s = String(sid);
   const shortId = s.length <= 14 ? s : `${s.slice(0, 6)}…${s.slice(-6)}`;
   return { id: sid, type: t, hasData: true, icon, label: `${labelBase} (${shortId}) (active)` };

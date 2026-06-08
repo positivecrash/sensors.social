@@ -116,6 +116,7 @@ const handleMessageClick = (data) => {
 
 /* + Realtime watch */
 let unwatchRealtime = null;
+const realtimeOwnerDeepLinkHandled = ref({ key: null });
 
 // Callback для обработки realtime данных
 const onRealtimePoint = async (point) => {
@@ -126,6 +127,11 @@ const onRealtimePoint = async (point) => {
     geo: point.geo,
     model: point.model,
     data: point.data,
+    // Keep owner in local state so realtime can use owner-bundling like daily recap.
+    owner: point.owner || point.donated_by || null,
+    device_model: point.device_model || null,
+    // Keep timestamp to pick a stable representative within an owner bundle.
+    timestamp: point.timestamp,
   });
 
   // Обновляем маркер сенсора
@@ -145,10 +151,63 @@ const onRealtimePoint = async (point) => {
         : prevLogs;
 
     // Обновляем sensorPoint с новыми данными
+    // Preserve owner bundle UI options (ownerSensorsWithData) while streaming realtime updates.
+    // Otherwise the owner dropdown can disappear intermittently.
+    const prevPopup = sensorsUI.sensorPoint.value;
+    // Always compute owner sensors list for the select in realtime.
+    // This is the only reliable source.
+    const computeRealtimeOwnerSensorsWithData = (popupPoint) => {
+      const owner = popupPoint?.owner ? String(popupPoint.owner).trim() : "";
+      if (!owner) return null;
+      const geo = popupPoint?.geo;
+      if (!geo) return null;
+      const list = Array.isArray(sensorsUI.sensors) ? sensorsUI.sensors : sensorsUI.sensors?.value;
+      const sensorsList = Array.isArray(list) ? list : [];
+      const ownerSensors = sensorsList.filter((s) => String(s?.owner || "").trim() === owner);
+      if (ownerSensors.length === 0) return null;
+      const nearby = ownerSensors.filter(
+        (s) => s?.geo && haversineKm(geo, s.geo) <= OWNER_GEO_CLUSTER_KM
+      );
+      const normalizeType = (dm) => {
+        const v = String(dm || "").toLowerCase();
+        if (v.includes("insight")) return "insight";
+        if (v.includes("urban")) return "urban";
+        if (v.includes("diy")) return "diy";
+        if (v) return "altruist";
+        return null;
+      };
+      const arr = (nearby.length > 0 ? nearby : ownerSensors).map((s) => ({
+        id: s.sensor_id,
+        hasData: true,
+        type: normalizeType(s?.device_model),
+        geo: s.geo,
+      }));
+      // Ensure active sensor is included.
+      const sid = String(popupPoint?.sensor_id || "");
+      if (sid && !arr.some((o) => String(o.id) === sid)) {
+        arr.unshift({ id: sid, hasData: true, type: null, geo });
+      }
+      return arr;
+    };
+
+    const nextPopupOwner = point.owner || point.donated_by || prevPopup?.owner || null;
+    const computedOwnerSensors = computeRealtimeOwnerSensorsWithData({
+      ...prevPopup,
+      owner: nextPopupOwner,
+      geo: point.geo || prevPopup?.geo,
+      sensor_id: point.sensor_id,
+    });
+
     sensorsUI.sensorPoint.value = {
-      ...sensorsUI.sensorPoint.value,
+      ...prevPopup,
+      // Always merge meta from realtime payload into the open popup.
+      geo: point.geo || prevPopup?.geo,
+      model: point.model || prevPopup?.model,
+      owner: nextPopupOwner,
+      device_model: point.device_model || prevPopup?.device_model || null,
       data: point.data,
       logs: nextLogs,
+      ...(computedOwnerSensors ? { ownerSensorsWithData: computedOwnerSensors } : null),
     };
 
     // Обновляем логи для открытого сенсора
@@ -327,8 +386,8 @@ watch(
           const list = Array.isArray(sensorsUI.sensors)
             ? sensorsUI.sensors
             : Array.isArray(sensorsUI.sensors?.value)
-              ? sensorsUI.sensors.value
-              : [];
+            ? sensorsUI.sensors.value
+            : [];
 
           const ownerSensors = list.filter((s) => String(s?.owner || "") === o);
           if (ownerSensors.length === 0) return null;
@@ -411,7 +470,8 @@ watch(
             ? pickDefaultOwnerSensorId(route.query.owner, route.query.lat, route.query.lng)
             : null;
 
-        const liveSensorId = route.query.sensor || ownerDefaultId || sensorsUI.sensorPoint?.value?.sensor_id;
+        const liveSensorId =
+          route.query.sensor || ownerDefaultId || sensorsUI.sensorPoint?.value?.sensor_id;
         if (liveSensorId) {
           // Ищем полные данные сенсора в sensorsUI.sensors
           const fullSensorData = sensorsUI.sensors.find((s) => s.sensor_id === liveSensorId);
@@ -421,6 +481,9 @@ watch(
             fullSensorData || {
               sensor_id: liveSensorId,
               geo: { lat: parseFloat(route.query.lat), lng: parseFloat(route.query.lng) },
+              // On hard refresh in realtime, sensors list may be empty until pubsub delivers points.
+              // Keep owner from URL so popup header and owner-select can render immediately.
+              owner: route.query.owner ? String(route.query.owner) : null,
               address: existingAddress || null,
             }
           );
@@ -430,9 +493,10 @@ watch(
       return; // Останавливаем выполнение watcher после перезагрузки данных
     }
 
-    // Обновляем попап сенсора при изменении sensor или при первом заходе с сенсором
-    // Но не обновляем при переключении провайдера
-    if (newQuery.sensor && (sensorChanged || !oldQuery) && !providerChanged) {
+    // Обновляем попап сенсора при изменении sensor или при первом заходе с сенсором.
+    // Important: on hard refresh `providerChanged` is true (oldQuery undefined), but we still
+    // must open the popup from URL in realtime mode.
+    if (newQuery.sensor && (sensorChanged || !oldQuery)) {
       // In realtime mode `sensorsUI.sensors` can be empty on startup until pubsub points arrive.
       // Still open/update popup using URL fallback, so logs loading can start immediately.
       const fullSensorData = sensorsUI.sensors.find((s) => s.sensor_id === newQuery.sensor);
@@ -441,10 +505,60 @@ watch(
         fullSensorData || {
           sensor_id: newQuery.sensor,
           geo: { lat: parseFloat(newQuery.lat), lng: parseFloat(newQuery.lng) },
+          owner: newQuery.owner ? String(newQuery.owner) : null,
           address: existingAddress || null,
         }
       );
       sensorsUI.updateSensorPopup(point);
+    }
+
+    // Realtime deep link: owner=... without sensor=...
+    if (
+      mapState.currentProvider.value === "realtime" &&
+      newQuery.owner &&
+      !newQuery.sensor &&
+      newQuery.lat != null &&
+      newQuery.lng != null
+    ) {
+      const owner = String(newQuery.owner).trim();
+      const latN = Number(newQuery.lat);
+      const lngN = Number(newQuery.lng);
+      const hasAnchor = Number.isFinite(latN) && Number.isFinite(lngN);
+      if (!owner || !hasAnchor) return;
+
+      // One-shot per (owner + day + type + provider) to avoid loops on every realtime tick.
+      const k = `${owner}-${newQuery.date || ""}-${newQuery.type || ""}-${newQuery.provider || ""}`;
+      if (realtimeOwnerDeepLinkHandled.value.key === k) return;
+
+      const list = Array.isArray(sensorsUI.sensors) ? sensorsUI.sensors : sensorsUI.sensors?.value;
+      const sensorsList = Array.isArray(list) ? list : [];
+      const ownerSensors = sensorsList.filter((s) => String(s?.owner || "").trim() === owner);
+      const anchor = { lat: latN, lng: lngN };
+
+      // Pick the closest owner sensor to the anchor coordinates.
+      let best = null;
+      let bestDist = Infinity;
+      for (const s of ownerSensors) {
+        if (!hasValidCoordinates(s?.geo)) continue;
+        const d = haversineKm(anchor, s.geo);
+        if (d < bestDist) {
+          bestDist = d;
+          best = s;
+        }
+      }
+      if (!best?.sensor_id) return;
+
+      realtimeOwnerDeepLinkHandled.value = { key: k };
+      mapState.setMapSettings(route, router, {
+        sensor: best.sensor_id,
+        // keep owner in URL
+        owner,
+        lat: best.geo?.lat ?? latN,
+        lng: best.geo?.lng ?? lngN,
+        zoom: newQuery.zoom ?? 18,
+      });
+
+      sensorsUI.updateSensorPopup(best, { fromMapClick: true });
     }
 
     // Обновляем попап сообщения при изменении message или при первом заходе с сообщением

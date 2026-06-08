@@ -1,4 +1,4 @@
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 
 import { useMap } from "@/composables/useMap";
@@ -242,6 +242,7 @@ export function useSensors(localeComputed) {
         ...existingSensor,
         geo: data.geo || existingSensor.geo,
         model: data.model || existingSensor.model,
+        device_model: data.device_model !== undefined ? data.device_model : existingSensor.device_model,
         maxdata: { ...existingSensor.maxdata, ...(data.maxdata || {}) },
         data: { ...existingSensor.data, ...(data.data || {}) }, // Мержим данные!
         logs: data.logs !== undefined ? data.logs : existingSensor.logs ?? null,
@@ -256,6 +257,7 @@ export function useSensors(localeComputed) {
       const sensorData = formatPointForSensor({
         sensor_id: sensorId,
         geo: data.geo || { lat: 0, lng: 0 },
+        device_model: data.device_model || null,
         maxdata: data.maxdata || {},
         data: data.data || {},
         logs: data.logs ?? null,
@@ -393,7 +395,7 @@ export function useSensors(localeComputed) {
         };
       };
 
-      const logArray = await getSensorDataWithCache(
+      let logArray = await getSensorDataWithCache(
         sensorId,
         start,
         end,
@@ -402,6 +404,8 @@ export function useSensors(localeComputed) {
         currentLogsAbortController.signal,
         handleProgressUpdate
       );
+
+      // NOTE: No remote fallback in realtime.
 
       // Проверяем, не был ли запрос отменен
       if (currentLogsRequestId !== requestId) {
@@ -531,6 +535,100 @@ export function useSensors(localeComputed) {
     try {
       isUpdatingPopup.value = true;
 
+      const mergePopupPoint = (prev, next) => {
+        if (!prev) return next;
+        if (!next) return prev;
+        const sameId = String(prev?.sensor_id || "") === String(next?.sensor_id || "");
+        if (!sameId) return next;
+
+        const nextAddr = next.address;
+        const prevAddr = prev.address;
+        const usePrevAddr =
+          (!nextAddr || nextAddr === "Loading address...") &&
+          prevAddr &&
+          prevAddr !== "Loading address...";
+
+        const nextOwnerSensors = next.ownerSensorsWithData;
+        const prevOwnerSensors = prev.ownerSensorsWithData;
+        const usePrevOwnerSensors =
+          !Array.isArray(nextOwnerSensors) ||
+          (Array.isArray(prevOwnerSensors) &&
+            prevOwnerSensors.length > 0 &&
+            prevOwnerSensors.length >= (nextOwnerSensors?.length || 0));
+
+        return {
+          ...prev,
+          ...next,
+          address: usePrevAddr ? prevAddr : nextAddr,
+          owner: next.owner || prev.owner,
+          geo: next.geo || prev.geo,
+          model: next.model || prev.model,
+          data: next.data || prev.data,
+          // Prefer the larger/more stable owner options list.
+          ownerSensorsWithData: usePrevOwnerSensors ? prevOwnerSensors : nextOwnerSensors,
+        };
+      };
+
+      // This prevents the owner select from disappearing during frequent realtime re-renders.
+      const getRealtimeOwnerSensorsWithData = (p) => {
+        if (mapState.currentProvider.value !== "realtime") return null;
+        const owner = p?.owner ? String(p.owner).trim() : "";
+        if (!owner) return null;
+        const geo = p?.geo;
+        if (!hasValidCoordinates(geo)) return null;
+        const list = Array.isArray(sensors.value) ? sensors.value : [];
+        const ownerSensors = list.filter((s) => String(s?.owner || "").trim() === owner);
+        // On hard refresh in realtime, sensors list can be empty until pubsub delivers points.
+        // Still expose the active sensor as an option so the select can render.
+        if (ownerSensors.length === 0) {
+          const sid = p?.sensor_id ? String(p.sensor_id) : "";
+          if (!sid) return null;
+          return [{ id: sid, hasData: true, type: null, geo }];
+        }
+
+        // Keep the same proximity rule as remote owner bundling.
+        const nearby = ownerSensors.filter(
+          (s) => hasValidCoordinates(s?.geo) && haversineKm(geo, s.geo) <= OWNER_GEO_CLUSTER_KM
+        );
+        if (nearby.length === 0) return null;
+
+        return nearby.map((s) => ({
+          id: s.sensor_id,
+          hasData: true,
+          type: null,
+          geo: s.geo,
+        }));
+      };
+
+      // Realtime popup can be called with partial points during redraws.
+      // Backfill critical fields from URL / existing popup state to prevent the header/select
+      // from disappearing for a render tick.
+      if (mapState.currentProvider.value === "realtime") {
+        const open = sensorPoint.value && sensorPoint.value.sensor_id === point.sensor_id ? sensorPoint.value : null;
+        if (!point.owner && route.query.owner && route.query.sensor === point.sensor_id) {
+          point.owner = String(route.query.owner);
+        }
+        if (!point.owner && open?.owner) {
+          point.owner = open.owner;
+        }
+        if (!point.address && open?.address) {
+          point.address = open.address;
+        }
+      }
+
+      // If popup is already open in realtime, keep owner options stable even if
+      // the caller-provided `point` is missing them (common during redraws).
+      if (mapState.currentProvider.value === "realtime" && sensorPoint.value?.sensor_id) {
+        const rtOwnerSensors = getRealtimeOwnerSensorsWithData(sensorPoint.value);
+        if (
+          rtOwnerSensors &&
+          (!sensorPoint.value.ownerSensorsWithData ||
+            rtOwnerSensors.length > (sensorPoint.value.ownerSensorsWithData?.length || 0))
+        ) {
+          sensorPoint.value = { ...sensorPoint.value, ownerSensorsWithData: rtOwnerSensors };
+        }
+      }
+
       // Получаем адрес сенсора - сначала из кэша, потом из API
       if (
         !point.address &&
@@ -568,13 +666,14 @@ export function useSensors(localeComputed) {
       // Проверяем есть ли изменения в данных сенсора
       const foundSensor = sensors.value.find((s) => s.sensor_id === point.sensor_id);
       const isNewPopup = !isSensorOpen(point.sensor_id);
+      const isRealtime = mapState.currentProvider.value === "realtime";
       const hasDataChanges =
         !foundSensor ||
         !foundSensor.geo ||
         !point.geo ||
         foundSensor.geo.lat !== point.geo.lat ||
         foundSensor.geo.lng !== point.geo.lng ||
-        foundSensor.address !== point.address;
+        (!isRealtime && foundSensor.address !== point.address);
 
       // Если попап не открыт для того же сенсора ИЛИ есть изменения в данных
       if (isNewPopup || hasDataChanges) {
@@ -600,11 +699,41 @@ export function useSensors(localeComputed) {
           point.logs = null;
         }
 
+        // If we're updating the same open sensor, keep stable fields from the current popup.
+        // This avoids header/select flicker when callers pass partial points.
+        const prevOpen =
+          sensorPoint.value && sensorPoint.value.sensor_id === point.sensor_id ? sensorPoint.value : null;
+        if (prevOpen) {
+          const prevAddr = prevOpen.address && prevOpen.address !== "Loading address..." ? prevOpen.address : null;
+          if ((!point.address || point.address === "Loading address...") && prevAddr) {
+            point.address = prevAddr;
+          }
+          if (!point.owner && prevOpen.owner) {
+            point.owner = prevOpen.owner;
+          }
+          if (!point.ownerSensorsWithData && prevOpen.ownerSensorsWithData) {
+            point.ownerSensorsWithData = prevOpen.ownerSensorsWithData;
+          }
+        }
+
+        // Attach owner dropdown options.
+        const rtOwnerSensors = getRealtimeOwnerSensorsWithData(point);
+        if (
+          rtOwnerSensors &&
+          (!point.ownerSensorsWithData || rtOwnerSensors.length > (point.ownerSensorsWithData?.length || 0))
+        ) {
+          point.ownerSensorsWithData = rtOwnerSensors;
+        }
+
         sensorPoint.value = formatPointForSensor({
           ...point,
           geo: point.geo,
           zoom: point.zoom,
         });
+        // In realtime, never let partial redraws wipe header/select fields.
+        if (mapState.currentProvider.value === "realtime") {
+          sensorPoint.value = mergePopupPoint(prevOpen, sensorPoint.value);
+        }
 
         // sensors:
         // Don't create a new marker entry for "owner dropdown" sensors that aren't part of the map points list.
@@ -620,6 +749,17 @@ export function useSensors(localeComputed) {
 
         // Устанавливаем активный маркер и двигаем карту
         setActiveMarker(point.sensor_id);
+      }
+      // Even if popup isn't recreated (no data changes), ensure realtime owner options exist.
+      if (mapState.currentProvider.value === "realtime" && sensorPoint.value?.sensor_id) {
+        const rtOwnerSensors = getRealtimeOwnerSensorsWithData(sensorPoint.value);
+        if (
+          rtOwnerSensors &&
+          (!sensorPoint.value.ownerSensorsWithData ||
+            rtOwnerSensors.length > (sensorPoint.value.ownerSensorsWithData?.length || 0))
+        ) {
+          sensorPoint.value = { ...sensorPoint.value, ownerSensorsWithData: rtOwnerSensors };
+        }
       }
 
       // Preload v2 meta so owner dropdown can render early (daily recap).
@@ -668,6 +808,43 @@ export function useSensors(localeComputed) {
   };
 
   /**
+   * Realtime hydration (safe):
+   * On hard refresh, the popup can open from URL before pubsub delivered any points,
+   * so header/select show skeleton. As soon as the sensor appears in `sensors.value`,
+   * we PATCH the already-open popup once (no re-opening, no log reload storm).
+   */
+  const realtimeHydratedSid = ref(null);
+  watch(
+    () => [mapState.currentProvider.value, route.query.sensor, sensors.value.length],
+    () => {
+      if (mapState.currentProvider.value !== "realtime") return;
+      const sid = String(route.query.sensor || sensorPoint.value?.sensor_id || "").trim();
+      if (!sid) return;
+      if (!sensorPoint.value || String(sensorPoint.value.sensor_id || "") !== sid) return;
+
+      // One-shot per sensor id.
+      if (realtimeHydratedSid.value === sid) return;
+
+      const full = (Array.isArray(sensors.value) ? sensors.value : []).find(
+        (s) => String(s?.sensor_id || "") === sid
+      );
+      if (!full) return;
+
+      // Patch header-critical fields only (avoid updateSensorPopup() loops).
+      const next = {
+        ...sensorPoint.value,
+        geo: full.geo || sensorPoint.value.geo,
+        model: full.model || sensorPoint.value.model,
+        owner: full.owner || sensorPoint.value.owner,
+        data: full.data || sensorPoint.value.data,
+      };
+      sensorPoint.value = next;
+      realtimeHydratedSid.value = sid;
+    },
+    { immediate: true }
+  );
+
+  /**
    * Создает унифицированный объект point для сенсора
    * @param {Object} basePoint - Базовые данные сенсора
    * @param {Object} options - Дополнительные опции
@@ -681,10 +858,13 @@ export function useSensors(localeComputed) {
       sensor_id: basePoint.sensor_id,
       geo: basePoint.geo,
       model: basePoint.model || DEFAULT_SENSOR_MODEL,
+      device_model: basePoint.device_model || null,
       maxdata: basePoint.maxdata || {},
       data: basePoint.data || {},
       address: basePoint.address || null,
       owner: basePoint.owner || null,
+      timestamp: basePoint.timestamp ?? null,
+      ownerSensorsWithData: basePoint.ownerSensorsWithData ?? null,
       isBookmarked: basePoint.isBookmarked || false,
       logs: Array.isArray(basePoint.logs)
         ? sanitizeSensorLogsPmSentinels(basePoint.logs)
@@ -925,7 +1105,53 @@ export function useSensors(localeComputed) {
       // Обновляем маркер с правильным цветом
       const unifiedPoint = formatPointForSensor(point, { calculateValue: true });
 
-      sensorsUtils.upsertPoint(unifiedPoint, mapState.currentUnit.value);
+      // Realtime: bundle sensors by owner+geo proximity, like daily recap (remote).
+      if (mapState.currentProvider.value === "realtime" && unifiedPoint.owner) {
+        const owner = String(unifiedPoint.owner);
+        const ownerSensors = (sensors.value || []).filter((s) => String(s?.owner || "") === owner);
+
+        // Cluster by owner proximity (same logic as remote dedupe), but scoped to this owner
+        const clusters = [];
+        for (const s of ownerSensors) {
+          const geo = s?.geo;
+          let placed = false;
+          for (const c of clusters) {
+            const closeEnough = c.members.some((m) => haversineKm(geo, m?.geo) <= OWNER_GEO_CLUSTER_KM);
+            if (closeEnough) {
+              c.members.push(s);
+              placed = true;
+              break;
+            }
+          }
+          if (!placed) clusters.push({ members: [s] });
+        }
+
+        const reps = [];
+        for (const c of clusters) {
+          let best = c.members[0] || null;
+          let bestTs = Number(best?.timestamp || 0);
+          for (const m of c.members) {
+            const ts = Number(m?.timestamp || 0);
+            if (Number.isFinite(ts) && ts > bestTs) {
+              best = m;
+              bestTs = ts;
+            }
+          }
+          if (best) reps.push(best);
+        }
+
+        const repIds = new Set(reps.map((r) => String(r.sensor_id)));
+        for (const s of ownerSensors) {
+          const sid = String(s?.sensor_id || "");
+          if (sid && !repIds.has(sid)) sensorsUtils.removeMarker(sid);
+        }
+        for (const rep of reps) {
+          const repPoint = formatPointForSensor(rep, { calculateValue: true });
+          sensorsUtils.upsertPoint(repPoint, mapState.currentUnit.value);
+        }
+      } else {
+        sensorsUtils.upsertPoint(unifiedPoint, mapState.currentUnit.value);
+      }
     } catch (error) {
       console.error("Error updating marker:", error, point);
     }

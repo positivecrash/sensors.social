@@ -42,7 +42,7 @@
       <div class="chart-wrapper">
         <Chart ref="chartRef" constructor-type="stockChart" :options="chartOptions" />
       </div>
-      
+
       <div class="custom-legend">
         <span
           v-for="item in visibleLegend"
@@ -170,7 +170,7 @@ const activeLegendKey = computed(() => {
   return visibleLegend.value[0]?.key || null;
 });
 
-const isRealtime = computed(() => mapState.currentProvider.value === "realtime");
+const isRealtime = computed(() => mapState.timelineMode.value === "realtime");
 
 // Получаем экземпляр Highcharts для работы с графиком
 const chart = computed(() => chartRef.value?.chart);
@@ -209,7 +209,6 @@ const yAxisConfig = computed(() =>
     visible: true,
   }))
 );
-
 
 const activeLegendUnits = computed(() => {
   const legendKey = activeLegendKey.value;
