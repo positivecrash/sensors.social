@@ -6,8 +6,8 @@
       rel="noopener noreferrer"
       class="maintenance-banner-link"
     >
-      <img alt="" src="@/assets/images/cyberpunks-shop-logo.webp" class="maintenance-banner-img-centered" />
-      Get your sensor on the map. Track your local environment.
+      <span>Buy a map-ready air quality sensor <i>[Track your local environment]</i></span>
+      <font-awesome-icon icon="fa-solid fa-arrow-right" class="maintenance-banner-arrow" aria-hidden="true" />
     </a>
   </div>
   <RouterView />
@@ -142,7 +142,11 @@ onMounted(async () => {
 }
 
 .maintenance-banner-link {
-  display: block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35em;
+  width: 100%;
   color: var(--color-light);
   text-decoration: none;
   font-size: 0.9rem;
@@ -157,10 +161,14 @@ onMounted(async () => {
   color: var(--color-light);
 }
 
-.maintenance-banner-img-centered {
+/* .maintenance-banner-img-centered {
   display: block;
-  max-width: 50px;
+  max-width: 40px;
   margin: 0 auto 10px;
+} */
+
+.maintenance-banner i {
+  font-weight: 400;
 }
 
 @media screen and (max-width: 600px) {
@@ -170,6 +178,10 @@ onMounted(async () => {
 
   .maintenance-banner-link {
     font-size: 0.85rem;
+  }
+
+  .maintenance-banner i {
+    display: block;
   }
 }
 </style>
