@@ -549,17 +549,25 @@ const updateChart = async (log, legendKey = null) => {
             },
             false
           );
-          existing.setData(ns.data, false, false, false);
           if (typeof prevVis[ns.id] === "boolean") {
             existing.setVisible(prevVis[ns.id], false);
           }
-          // Добавляем только новые точки
-          ns.data
-            .filter((p) => p[0] > (existing.data.at(-1)?.x || 0))
-            .forEach((p) => {
+
+          const lastX = existing.data.at(-1)?.x ?? -Infinity;
+          const newPoints = ns.data.filter((p) => p[0] > lastX);
+
+          if (existing.data.length === 0) {
+            existing.setData(ns.data, false, false, false);
+            maxTime = Math.max(maxTime, ns.data.at(-1)?.[0] || 0);
+          } else if (newPoints.length > 0) {
+            newPoints.forEach((p) => {
               existing.addPoint(p, false, false);
               maxTime = Math.max(maxTime, p[0]);
             });
+          } else if (ns.data.length !== existing.data.length) {
+            existing.setData(ns.data, false, false, false);
+            maxTime = Math.max(maxTime, ns.data.at(-1)?.[0] || 0);
+          }
         } else {
           chart.value.addSeries({ ...ns, visible: true }, false);
           const pts = chart.value.get(ns.id).data;
@@ -1017,6 +1025,9 @@ function clearChartInstantly() {
   const chart = chartRef.value?.chart;
   if (!chart || !chart.series) return;
 
+  seriesCache.clear();
+  chartSeries.value = [];
+
   try {
     // Временно отключаем все анимации
     const originalAnimation = chart.options.chart?.animation;
@@ -1052,10 +1063,16 @@ function clearChartInstantly() {
       }
     }
 
-    // Принудительно перерисовываем
+    // Drop realtime 1h zoom so day/week axes can be set fresh
+    if (chart.xAxis?.[0]) {
+      chart.xAxis[0].setExtremes(null, null, false, false);
+    }
+    if (chart.navigator?.xAxis) {
+      chart.navigator.xAxis.setExtremes(null, null, false, false);
+    }
+
     chart.redraw(false);
 
-    // Восстанавливаем анимации
     if (originalAnimation !== undefined) {
       chart.update(
         {
@@ -1066,7 +1083,6 @@ function clearChartInstantly() {
     }
   } catch (error) {
     console.warn("Error clearing chart:", error);
-    // В случае ошибки просто перерисовываем график
     chart.redraw(false);
   }
 }
@@ -1110,6 +1126,9 @@ watch(
       legendKey !== oldLegendKey
     ) {
       clearChartInstantly();
+      if (timelineMode !== oldTimelineMode) {
+        seriesCache.clear();
+      }
     }
 
     if (!Array.isArray(log) || log.length === 0) return;

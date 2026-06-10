@@ -55,7 +55,10 @@
             type="button"
             role="option"
             class="sensor-owner-select__option"
-            :class="{ active: opt.id === currentSensorId, disabled: opt.hasData === false }"
+            :class="{
+              active: String(opt.id) === currentSensorId,
+              disabled: opt.hasData === false,
+            }"
             @click="selectOwnerSensor(opt.id)"
           >
             <img
@@ -110,7 +113,6 @@ import { useMap } from "@/composables/useMap";
 import { useSensors } from "@/composables/useSensors";
 import { classifySensorTypeFromLogSamples } from "@/utils/map/sensors/requests";
 import { dayISO } from "../../../utils/date";
-import { isPointNearby } from "../../../utils/utils";
 
 import diyIcon from "@/assets/images/sensorTypes/DIY.svg";
 import insightIcon from "@/assets/images/sensorTypes/Insight.svg";
@@ -130,18 +132,28 @@ const { t } = useI18n();
 const mapState = useMap();
 const sensorsUI = useSensors();
 
-const currentSensorId = computed(() => props.point?.sensor_id || "");
+const isRealtimeProvider = computed(() => mapState.currentProvider.value === "realtime");
+
+const currentSensorId = computed(() =>
+  String(props.point?.sensor_id || route.query.sensor || "")
+);
+
+const formatSensorIdShort = (id) => {
+  const s = String(id || "");
+  if (!s) return "";
+  if (s.length <= 14) return s;
+  return `${s.slice(0, 6)}…${s.slice(-6)}`;
+};
+
+const ownerOptionType = (o) => {
+  if (o?.type) return o.type;
+  return "altruist";
+};
 
 const ownerSensorOptions = computed(() => {
   const list = props.point?.ownerSensorsWithData;
-  // Daily recap: show only sensors that actually have data.
   const arr = Array.isArray(list) ? list.filter(Boolean) : [];
-  return arr.filter((o) => {
-    if (o.hasData === true && isPointNearby(o.geo, props.point.geo, 5)) {
-      return o;
-    }
-  });
-  // return arr.filter((o) => o.hasData === true);
+  return arr.filter((o) => o.hasData === true);
 });
 
 const labeledOwnerOptions = computed(() => {
@@ -149,16 +161,8 @@ const labeledOwnerOptions = computed(() => {
   const counts = { insight: 0, urban: 0, altruist: 0, diy: 0 };
   const out = [];
   const activeId = currentSensorId.value;
-  const formatSensorIdShort = (id) => {
-    const s = String(id || "");
-    if (!s) return "";
-    if (s.length <= 14) return s;
-    return `${s.slice(0, 6)}…${s.slice(-6)}`;
-  };
   for (const o of opts) {
-    const hasData = o?.hasData === true;
-    if (!hasData) continue;
-    const type = o?.type || "altruist";
+    const type = ownerOptionType(o);
     if (!Object.prototype.hasOwnProperty.call(counts, type)) counts[type] = 0;
     counts[type] += 1;
     const n = counts[type];
@@ -197,7 +201,14 @@ const labeledOwnerOptions = computed(() => {
 const activeFallbackOption = computed(() => {
   const sid = currentSensorId.value;
   if (!sid) return null;
-  const t = classifySensorTypeFromLogSamples(props.log) || null;
+  const metaType = props.point?.ownerSensorsWithData?.find(
+    (o) => String(o?.id) === sid
+  )?.type;
+  const t =
+    metaType ||
+    (!isRealtimeProvider.value
+      ? classifySensorTypeFromLogSamples(props.log) || "altruist"
+      : "altruist");
   const icon =
     t === "insight"
       ? insightIcon
@@ -216,9 +227,13 @@ const activeFallbackOption = computed(() => {
       : t === "altruist"
       ? "Altruist"
       : "Sensor";
-  const s = String(sid);
-  const shortId = s.length <= 14 ? s : `${s.slice(0, 6)}…${s.slice(-6)}`;
-  return { id: sid, type: t, hasData: true, icon, label: `${labelBase} (${shortId}) (active)` };
+  return {
+    id: sid,
+    type: t,
+    hasData: true,
+    icon,
+    label: `${labelBase} (${formatSensorIdShort(sid)}) (active)`,
+  };
 });
 
 const selectedOwnerSensorId = computed(() => {
@@ -229,12 +244,21 @@ const selectedOwnerSensorId = computed(() => {
 
 const displayOwnerOptions = computed(() => {
   const sid = currentSensorId.value;
-  const opts = labeledOwnerOptions.value.slice();
+  let opts = labeledOwnerOptions.value.slice();
   if (!sid) return opts;
-  if (opts.some((o) => o.id === sid)) return opts;
-  // Meta/options not ready yet for current sensor, but logs are already loaded -> inject active option.
-  const fb = activeFallbackOption.value;
-  if (fb) return [fb, ...opts];
+
+  if (!opts.some((o) => String(o.id) === sid)) {
+    const fb = activeFallbackOption.value;
+    if (fb) opts = [fb, ...opts];
+  }
+
+  opts.sort((a, b) => {
+    const aActive = String(a.id) === sid;
+    const bActive = String(b.id) === sid;
+    if (aActive && !bActive) return -1;
+    if (!aActive && bActive) return 1;
+    return 0;
+  });
   return opts;
 });
 
@@ -242,10 +266,10 @@ const ownerDropdownOpen = ref(false);
 
 const currentOwnerOption = computed(() => {
   const sid = currentSensorId.value || selectedOwnerSensorId.value;
-  const match = displayOwnerOptions.value.find((o) => o.id === sid);
+  const match = displayOwnerOptions.value.find((o) => String(o.id) === String(sid));
   if (match) return match;
-  // Still nothing (no logs + no meta). Avoid random option, but don't get stuck when logs exist.
-  return { id: sid, type: null, icon: null, label: "Loading…" };
+  if (sid) return activeFallbackOption.value;
+  return null;
 });
 
 const toggleOwnerDropdown = () => {
@@ -281,9 +305,11 @@ const selectOwnerSensor = (id) => {
     owner:
       props.point?.owner || cachedOwner ? String(props.point?.owner || cachedOwner) : undefined,
   });
-  // Trigger owner loading for the newly selected sensor so URL can get `owner=` back.
   try {
     sensorsUI?.ensureOwnerLoaded?.(nextId);
+    if (mapState.currentProvider.value === "realtime") {
+      void sensorsUI?.hydrateOwnerBundleForRealtime?.(nextId);
+    }
   } catch {}
   closeOwnerDropdown();
 };
@@ -346,13 +372,15 @@ const handleTimelineModeChange = (mode) => {
       date: dayISO(), // Устанавливаем текущую дату
     });
     mapState.setTimelineMode("realtime");
+    if (props.point?.sensor_id) {
+      void sensorsUI?.hydrateOwnerBundleForRealtime?.(props.point.sensor_id);
+    }
   } else {
-    // Для day/week/month переключаемся на remote провайдер
     mapState.setMapSettings(route, router, { provider: "remote" });
     mapState.setTimelineMode(mode, props.point?.sensor_id);
-
-    // Для day/week/month не меняем дату - только переключаем провайдер
-    // Логи будут загружены с правильными границами в updateSensorLogs
+    if (props.point?.sensor_id) {
+      void sensorsUI.updateSensorLogs(props.point.sensor_id);
+    }
   }
 };
 
@@ -443,6 +471,7 @@ onMounted(() => {
   // Инициализируем режим таймлайна в зависимости от провайдера
   if (mapState.currentProvider.value === "realtime") {
     state.timelineMode = "realtime";
+    mapState.setTimelineMode("realtime", props.point?.sensor_id);
   } else {
     // Используем глобальное состояние или day по умолчанию
     const globalMode = mapState.timelineMode.value;
@@ -487,6 +516,7 @@ watch(
       // Автоматически переключаем режим таймлайна в зависимости от провайдера
       if (newProvider === "realtime") {
         state.timelineMode = "realtime";
+        mapState.setTimelineMode("realtime", props.point?.sensor_id);
       } else if (state.timelineMode === "realtime") {
         // Если переключились с realtime на remote, переключаемся на day
         state.timelineMode = "day";

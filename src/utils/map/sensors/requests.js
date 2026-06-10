@@ -37,16 +37,47 @@ export function haversineKm(geoA, geoB) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
+export function normalizeOwnerKey(item) {
+  return String(item?.owner || item?.donated_by || "").trim();
+}
+
+export function logSamplesHaveCo2(samples) {
+  if (!Array.isArray(samples) || samples.length === 0) return false;
+  for (const item of samples) {
+    const n = Number(item?.data?.co2);
+    if (Number.isFinite(n)) return true;
+  }
+  return false;
+}
+
 /**
- * One marker per owner only when deployments are geographically close.
- * Same owner in distant regions (e.g. Asia vs Europe) keeps separate markers.
+ * Map marker for an owner geo cluster: prefer Urban (no CO₂), then latest timestamp.
  */
-function dedupeByOwnerProximity(list, maxKm = OWNER_GEO_CLUSTER_KM) {
+export function pickOwnerClusterRepresentative(members) {
+  if (!Array.isArray(members) || members.length === 0) return null;
+
+  const ranked = members.map((m) => {
+    const co2 = Number(m?.data?.co2 ?? m?.maxdata?.co2);
+    const isInsight = Number.isFinite(co2);
+    const ts = Number(m?.timestamp || 0);
+    return { m, isInsight, ts };
+  });
+
+  const urbanOnly = ranked.filter((x) => !x.isInsight);
+  const pool = urbanOnly.length > 0 ? urbanOnly : ranked;
+  pool.sort((a, b) => b.ts - a.ts);
+  return pool[0]?.m || members[0];
+}
+
+/**
+ * One map marker per owner within `maxKm`. Distant regions keep separate markers.
+ */
+export function dedupeSensorsForMap(list, maxKm = OWNER_GEO_CLUSTER_KM) {
   const withoutOwner = [];
   const byOwner = new Map();
 
   for (const item of Array.isArray(list) ? list : []) {
-    const owner = item?.owner ? String(item.owner) : "";
+    const owner = normalizeOwnerKey(item);
     if (!owner) {
       withoutOwner.push(item);
       continue;
@@ -70,26 +101,19 @@ function dedupeByOwnerProximity(list, maxKm = OWNER_GEO_CLUSTER_KM) {
           break;
         }
       }
-      if (!placed) {
-        clusters.push({ members: [item] });
-      }
+      if (!placed) clusters.push({ members: [item] });
     }
     for (const c of clusters) {
-      // Pick a stable representative for this owner+geo cluster.
-      let best = c.members[0] || null;
-      let bestTs = Number(best?.timestamp || 0);
-      for (const m of c.members) {
-        const ts = Number(m?.timestamp || 0);
-        if (Number.isFinite(ts) && ts > bestTs) {
-          best = m;
-          bestTs = ts;
-        }
-      }
-      out.push(best);
+      const best = pickOwnerClusterRepresentative(c.members);
+      if (best) out.push(best);
     }
   }
 
   return out;
+}
+
+function dedupeByOwnerProximity(list, maxKm = OWNER_GEO_CLUSTER_KM) {
+  return dedupeSensorsForMap(list, maxKm);
 }
 
 // Импортируем утилиты для работы с IndexedDB
@@ -184,8 +208,7 @@ export async function getSensors(start, end, provider = "remote") {
         geo: { lat, lng },
         address: sensorData.address || null,
         donated_by: sensorData.donated_by || null,
-        // Many urban points don't include `owner`; treat `donated_by` as owner for URL/UI purposes.
-        owner: sensorData.owner || sensorData.donated_by || null,
+        owner: normalizeOwnerKey(sensorData) || null,
         timestamp: sensorData.timestamp || null,
       };
 
@@ -235,7 +258,7 @@ export async function getSensorMetaFromPeriod(sensorId, start, end) {
       geo: { lat, lng },
       address: sensorData.address || null,
       donated_by: sensorData.donated_by || null,
-      owner: sensorData.owner || sensorData.donated_by || null,
+      owner: normalizeOwnerKey(sensorData) || null,
       timestamp: sensorData.timestamp || null,
     };
   } catch (error) {
@@ -316,10 +339,12 @@ export function classifySensorTypeFromLogSamples(samples) {
   return "altruist";
 }
 
-/**
- * Returns "related sensors" (same owner) that have non-empty data in the latest v2 response.
- * Uses meta cached by getSensorData() v2 fetches.
- */
+function geoFromLogPoints(points) {
+  if (!Array.isArray(points) || points.length === 0) return null;
+  const geo = points[points.length - 1]?.geo;
+  if (!geo || !hasValidCoordinates(geo)) return null;
+  return geo;
+}
 export function getOwnerSensorsWithData(sensorId) {
   if (!sensorId) return [];
   const meta = latestSensorMetaById.get(sensorId);
@@ -329,12 +354,31 @@ export function getOwnerSensorsWithData(sensorId) {
   const sensors = Array.isArray(meta?.sensors) ? meta.sensors : [];
   const data = meta?.data && typeof meta.data === "object" ? meta.data : {};
 
-  return sensors.map((id) => {
+  const mapped = sensors.map((id) => {
     const points = Array.isArray(data?.[id]) ? data[id] : [];
-    const hasData = Array.isArray(points) && points.length > 0;
-    const geo = hasData ? points[points.length - 1].geo : "";
-    return { id, hasData, type: hasData ? classifySensorTypeFromLogSamples(points) : null, geo };
+    const hasData = points.length > 0;
+    const geo = geoFromLogPoints(points);
+    return {
+      id,
+      hasData,
+      type: hasData ? classifySensorTypeFromLogSamples(points) : null,
+      geo,
+    };
   });
+
+  const anchorGeo =
+    geoFromLogPoints(data?.[sensorId]) ||
+    mapped.map((o) => o.geo).find((g) => g) ||
+    null;
+
+  if (!anchorGeo) return mapped;
+
+  const clustered = mapped.filter((o) => {
+    if (!o.geo) return true;
+    return haversineKm(anchorGeo, o.geo) <= OWNER_GEO_CLUSTER_KM;
+  });
+
+  return clustered.length > 0 ? clustered : mapped;
 }
 
 /**

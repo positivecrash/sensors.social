@@ -47,9 +47,9 @@ import { settings } from "@config";
 import {
   unsubscribeRealtime,
   initProvider,
-  getSensorMetaFromPeriod,
   OWNER_GEO_CLUSTER_KM,
   haversineKm,
+  normalizeOwnerKey,
 } from "../utils/map/sensors/requests";
 import { hasValidCoordinates } from "../utils/utils";
 import { useSensors } from "../composables/useSensors";
@@ -128,7 +128,7 @@ const onRealtimePoint = async (point) => {
     model: point.model,
     data: point.data,
     // Keep owner in local state so realtime can use owner-bundling like daily recap.
-    owner: point.owner || point.donated_by || null,
+    owner: normalizeOwnerKey(point) || null,
     device_model: point.device_model || null,
     // Keep timestamp to pick a stable representative within an owner bundle.
     timestamp: point.timestamp,
@@ -137,17 +137,28 @@ const onRealtimePoint = async (point) => {
   // Обновляем маркер сенсора
   sensorsUI.updateSensorMarker(point);
 
-  // Если попап открыт для этого сенсора, обновляем его
-  if (sensorsUI.isSensorOpen(point.sensor_id)) {
-    const prevLogs = Array.isArray(sensorsUI.sensorPoint.value?.logs)
+  // Popup chart/logs: only while realtime tab is active (day/week use remote API logs).
+  if (
+    sensorsUI.isSensorOpen(point.sensor_id) &&
+    mapState.currentProvider.value === "realtime" &&
+    mapState.timelineMode.value === "realtime"
+  ) {
+    const prevLogs = (Array.isArray(sensorsUI.sensorPoint.value?.logs)
       ? sensorsUI.sensorPoint.value.logs
-      : [];
-    const hasTimestamp = Number.isFinite(point?.timestamp);
-    const alreadyExists =
-      hasTimestamp && prevLogs.some((item) => Number(item?.timestamp) === Number(point.timestamp));
+      : []
+    )
+      .map((item) => {
+        const ts = Number(item?.timestamp);
+        if (!Number.isFinite(ts) || !item?.data) return null;
+        return { timestamp: ts, data: item.data };
+      })
+      .filter(Boolean);
+    const ts = Number(point?.timestamp);
+    const entry =
+      Number.isFinite(ts) && point?.data ? { timestamp: ts, data: point.data } : null;
     const nextLogs =
-      hasTimestamp && !alreadyExists
-        ? [...prevLogs, { timestamp: point.timestamp, data: point.data }]
+      entry && !prevLogs.some((item) => item.timestamp === entry.timestamp)
+        ? [...prevLogs, entry]
         : prevLogs;
 
     // Обновляем sensorPoint с новыми данными
@@ -156,47 +167,19 @@ const onRealtimePoint = async (point) => {
     const prevPopup = sensorsUI.sensorPoint.value;
     // Always compute owner sensors list for the select in realtime.
     // This is the only reliable source.
-    const computeRealtimeOwnerSensorsWithData = (popupPoint) => {
-      const owner = popupPoint?.owner ? String(popupPoint.owner).trim() : "";
-      if (!owner) return null;
-      const geo = popupPoint?.geo;
-      if (!geo) return null;
-      const list = Array.isArray(sensorsUI.sensors) ? sensorsUI.sensors : sensorsUI.sensors?.value;
-      const sensorsList = Array.isArray(list) ? list : [];
-      const ownerSensors = sensorsList.filter((s) => String(s?.owner || "").trim() === owner);
-      if (ownerSensors.length === 0) return null;
-      const nearby = ownerSensors.filter(
-        (s) => s?.geo && haversineKm(geo, s.geo) <= OWNER_GEO_CLUSTER_KM
-      );
-      const normalizeType = (dm) => {
-        const v = String(dm || "").toLowerCase();
-        if (v.includes("insight")) return "insight";
-        if (v.includes("urban")) return "urban";
-        if (v.includes("diy")) return "diy";
-        if (v) return "altruist";
-        return null;
-      };
-      const arr = (nearby.length > 0 ? nearby : ownerSensors).map((s) => ({
-        id: s.sensor_id,
-        hasData: true,
-        type: normalizeType(s?.device_model),
-        geo: s.geo,
-      }));
-      // Ensure active sensor is included.
-      const sid = String(popupPoint?.sensor_id || "");
-      if (sid && !arr.some((o) => String(o.id) === sid)) {
-        arr.unshift({ id: sid, hasData: true, type: null, geo });
-      }
-      return arr;
-    };
-
-    const nextPopupOwner = point.owner || point.donated_by || prevPopup?.owner || null;
-    const computedOwnerSensors = computeRealtimeOwnerSensorsWithData({
-      ...prevPopup,
-      owner: nextPopupOwner,
-      geo: point.geo || prevPopup?.geo,
-      sensor_id: point.sensor_id,
-    });
+    const list = Array.isArray(sensorsUI.sensors) ? sensorsUI.sensors : sensorsUI.sensors?.value;
+    const sensorsList = Array.isArray(list) ? list : [];
+    const nextPopupOwner = normalizeOwnerKey(point) || prevPopup?.owner || null;
+    const computedOwnerSensors = sensorsUI.buildOwnerSensorsWithData(
+      {
+        ...prevPopup,
+        owner: nextPopupOwner,
+        geo: point.geo || prevPopup?.geo,
+        sensor_id: point.sensor_id,
+      },
+      sensorsList
+    );
+    const ownerSensorsWithData = computedOwnerSensors;
 
     sensorsUI.sensorPoint.value = {
       ...prevPopup,
@@ -207,11 +190,8 @@ const onRealtimePoint = async (point) => {
       device_model: point.device_model || prevPopup?.device_model || null,
       data: point.data,
       logs: nextLogs,
-      ...(computedOwnerSensors ? { ownerSensorsWithData: computedOwnerSensors } : null),
+      ...(ownerSensorsWithData ? { ownerSensorsWithData } : null),
     };
-
-    // Обновляем логи для открытого сенсора
-    await sensorsUI.updateSensorLogs(point.sensor_id);
   }
 };
 
@@ -414,54 +394,16 @@ watch(
           return bestId || null;
         };
 
-        const ensureSensorVisibleInRemoteBundle = async (sensorId) => {
-          const sid = sensorId ? String(sensorId) : "";
-          if (!sid || mapState.currentProvider.value !== "remote") return;
-
-          const mode = mapState.timelineMode.value || "day";
-          const { start, end } = getPeriodBounds(mapState.currentDate.value, mode);
-          const meta = await getSensorMetaFromPeriod(sid, start, end);
-          if (!meta || !hasValidCoordinates(meta.geo)) return;
-
-          const currentList = Array.isArray(sensorsUI.sensors?.value)
-            ? sensorsUI.sensors.value
-            : Array.isArray(sensorsUI.sensors)
-            ? sensorsUI.sensors
-            : [];
-
-          if (currentList.some((s) => String(s?.sensor_id || "") === sid)) return;
-
-          const owner = meta?.owner ? String(meta.owner) : "";
-          if (!owner) {
-            sensorsUI.setSensors([...currentList, meta]);
-            return;
-          }
-
-          const next = [...currentList];
-          let replaced = false;
-          for (let i = 0; i < next.length; i += 1) {
-            const cur = next[i];
-            if (!cur) continue;
-            if (String(cur?.owner || "") !== owner) continue;
-            const dist = haversineKm(meta.geo, cur.geo);
-            if (dist <= OWNER_GEO_CLUSTER_KM) {
-              next[i] = meta;
-              replaced = true;
-              break;
-            }
-          }
-          if (!replaced) next.push(meta);
-          sensorsUI.setSensors(next);
-        };
-
         if (mapState.currentProvider.value === "remote") {
-          // If the URL targets a concrete sensor_id, ensure it's not hidden by owner-bundling.
-          if (route.query.sensor) {
-            await ensureSensorVisibleInRemoteBundle(route.query.sensor);
-          }
-          // Для realtime маркеры обновляются по мере прихода данных
           await sensorsUI.updateSensorMaxData();
           sensorsUI.updateSensorMarkers();
+        } else {
+          sensorsUI.updateSensorMarkers(false);
+          const hydrateId =
+            route.query.sensor || sensorsUI.sensorPoint?.value?.sensor_id || null;
+          if (hydrateId) {
+            void sensorsUI.hydrateOwnerBundleForRealtime(hydrateId);
+          }
         }
 
         // После загрузки сенсоров обновляем попап: deep link `sensor=` или открытый попап (owner без sensor в URL)
