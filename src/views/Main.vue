@@ -50,6 +50,7 @@ import {
   OWNER_GEO_CLUSTER_KM,
   haversineKm,
   normalizeOwnerKey,
+  pickOwnerClusterRepresentative,
 } from "../utils/map/sensors/requests";
 import { hasValidCoordinates } from "../utils/utils";
 import { useSensors } from "../composables/useSensors";
@@ -168,28 +169,28 @@ const onRealtimePoint = async (point) => {
     // This is the only reliable source.
     const list = Array.isArray(sensorsUI.sensors) ? sensorsUI.sensors : sensorsUI.sensors?.value;
     const sensorsList = Array.isArray(list) ? list : [];
-    const nextPopupOwner = normalizeOwnerKey(point) || prevPopup?.owner || null;
-    const computedOwnerSensors = sensorsUI.buildOwnerSensorsWithData(
-      {
-        ...prevPopup,
-        owner: nextPopupOwner,
-        geo: point.geo || prevPopup?.geo,
-        sensor_id: point.sensor_id,
-      },
-      sensorsList
-    );
-    const ownerSensorsWithData = computedOwnerSensors;
+    const listOwner = sensorsList.find((s) => String(s?.sensor_id || "") === String(point.sensor_id));
+    const nextPopupOwner =
+      normalizeOwnerKey(point) || normalizeOwnerKey(listOwner) || normalizeOwnerKey(prevPopup) || null;
+
+    const bundlePoint = {
+      ...prevPopup,
+      owner: nextPopupOwner,
+      geo: point.geo || prevPopup?.geo,
+      sensor_id: point.sensor_id,
+      device_model: point.device_model || prevPopup?.device_model || null,
+    };
+    const ownerSensorsWithData = sensorsUI.buildOwnerSensorsWithData(bundlePoint, sensorsList);
 
     sensorsUI.sensorPoint.value = {
       ...prevPopup,
-      // Always merge meta from realtime payload into the open popup.
       geo: point.geo || prevPopup?.geo,
       model: point.model || prevPopup?.model,
       owner: nextPopupOwner,
       device_model: point.device_model || prevPopup?.device_model || null,
       data: point.data,
       logs: nextLogs,
-      ...(ownerSensorsWithData ? { ownerSensorsWithData } : null),
+      ...(ownerSensorsWithData?.length ? { ownerSensorsWithData } : null),
     };
   }
 };
@@ -342,7 +343,7 @@ watch(
       if (mapState.currentProvider.value === "remote") {
         await sensorsUI.updateSensorMaxData();
       } else {
-        sensorsUI.updateSensorMarkers(false);
+        sensorsUI.updateSensorMarkers(true);
       }
       sensorsUI.refreshOpenSensorMapMarker();
     }
@@ -373,32 +374,29 @@ watch(
           const lngN = Number(lng);
           const hasAnchor = Number.isFinite(latN) && Number.isFinite(lngN);
           if (!hasAnchor) {
-            return ownerSensors[0]?.sensor_id || null;
+            const rep = pickOwnerClusterRepresentative(ownerSensors) || ownerSensors[0];
+            return rep?.sensor_id || null;
           }
 
-          let bestId = ownerSensors[0]?.sensor_id || null;
-          let bestDist = Infinity;
           const anchor = { lat: latN, lng: lngN };
-
-          for (const s of ownerSensors) {
-            const d = haversineKm(anchor, s?.geo);
-            if (d < bestDist) {
-              bestDist = d;
-              bestId = s?.sensor_id || bestId;
-            }
-          }
-
-          return bestId || null;
+          const nearby = ownerSensors.filter(
+            (s) => hasValidCoordinates(s?.geo) && haversineKm(anchor, s.geo) <= OWNER_GEO_CLUSTER_KM
+          );
+          const pool = nearby.length > 0 ? nearby : ownerSensors;
+          const rep = pickOwnerClusterRepresentative(pool) || pool[0];
+          return rep?.sensor_id || null;
         };
 
         if (mapState.currentProvider.value === "remote") {
           await sensorsUI.updateSensorMaxData();
         } else {
-          sensorsUI.updateSensorMarkers(false);
+          sensorsUI.updateSensorMarkers(true);
           const hydrateId =
             route.query.sensor || sensorsUI.sensorPoint?.value?.sensor_id || null;
           if (hydrateId) {
-            void sensorsUI.hydrateOwnerBundleForRealtime(hydrateId);
+            void sensorsUI.hydrateOwnerBundleForRealtime(hydrateId).then(() => {
+              sensorsUI.refreshOpenSensorMapMarker?.();
+            });
           }
         }
 
@@ -473,17 +471,11 @@ watch(
       const ownerSensors = sensorsList.filter((s) => String(s?.owner || "").trim() === owner);
       const anchor = { lat: latN, lng: lngN };
 
-      // Pick the closest owner sensor to the anchor coordinates.
-      let best = null;
-      let bestDist = Infinity;
-      for (const s of ownerSensors) {
-        if (!hasValidCoordinates(s?.geo)) continue;
-        const d = haversineKm(anchor, s.geo);
-        if (d < bestDist) {
-          bestDist = d;
-          best = s;
-        }
-      }
+      const nearby = ownerSensors.filter(
+        (s) => hasValidCoordinates(s?.geo) && haversineKm(anchor, s.geo) <= OWNER_GEO_CLUSTER_KM
+      );
+      const pool = nearby.length > 0 ? nearby : ownerSensors.filter((s) => hasValidCoordinates(s?.geo));
+      const best = pickOwnerClusterRepresentative(pool) || pool[0];
       if (!best?.sensor_id) return;
 
       realtimeOwnerDeepLinkHandled.value = { key: k };

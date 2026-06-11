@@ -17,10 +17,12 @@ import {
   getSensorOwner,
   getOwnerSensorsWithData,
   filterOwnerBundleNearAnchor,
+  filterBundleOptionsForOwner,
   preloadSensorMeta,
   classifySensorTypeFromLogSamples,
   logSamplesHaveCo2,
   getCachedSensorMeta,
+  clearSensorMetaCache,
   computeMaxCo2FromMeta,
   pickOwnerClusterRepresentative,
   dedupeSensorsForMap,
@@ -173,31 +175,76 @@ function buildPubsubOwnerList(point, sensorsList, anchorGeo) {
 
 function buildOwnerSensorsWithData(point, sensorsList) {
   const sid = point?.sensor_id;
+  const ownerKey = normalizeOwnerKey(point);
   const anchorGeo = resolveBundleAnchorGeo(point, sensorsList);
   const pubsub = buildPubsubOwnerList(point, sensorsList, anchorGeo);
-  const meta = sid ? getOwnerSensorsWithData(sid, anchorGeo) : null;
+  const meta = sid ? getOwnerSensorsWithData(sid, anchorGeo, sensorsList) : null;
   const merged = mergeOwnerBundleLists(pubsub, meta);
   const filtered = filterOwnerBundleNearAnchor(merged, anchorGeo, sid);
-  return filtered && filtered.length > 0 ? filtered : null;
+  const ownerScoped =
+    ownerKey && filtered?.length
+      ? filterBundleOptionsForOwner(filtered, ownerKey, sid, sensorsList)
+      : filtered;
+  return ownerScoped && ownerScoped.length > 0 ? ownerScoped : null;
 }
 
-function mergeOwnerBundleOptions(fresh, prevOptions, anchorGeo, activeSensorId) {
-  const merged = mergeOwnerBundleLists(fresh, prevOptions);
-  if (!merged?.length) return prevOptions?.length ? prevOptions : null;
+function mergeOwnerBundleOptions(fresh, prevOptions, anchorGeo, activeSensorId, ownerKey = null) {
+  const owner = ownerKey ? String(ownerKey).trim() : "";
+  const prev =
+    owner && Array.isArray(prevOptions)
+      ? filterBundleOptionsForOwner(prevOptions, owner, activeSensorId, sensors.value)
+      : null;
+
+  const merged = mergeOwnerBundleLists(fresh, prev?.length ? prev : null);
+  if (!merged?.length) return null;
+
   const filtered = filterOwnerBundleNearAnchor(merged, anchorGeo, activeSensorId);
-  if (filtered?.length) return filtered;
-  return prevOptions?.length ? prevOptions : merged;
+  const pool = filtered?.length ? filtered : merged;
+  if (!owner) return pool.length > 0 ? pool : null;
+
+  const ownerScoped = filterBundleOptionsForOwner(pool, owner, activeSensorId, sensors.value);
+  return ownerScoped.length > 0 ? ownerScoped : null;
 }
 
 function applyFilteredOwnerBundleOptions(point, prevOptions, sensorsList) {
   if (!point) return null;
   const anchorGeo = resolveBundleAnchorGeo(point, sensorsList);
+  const ownerKey = normalizeOwnerKey(point);
+  const prev =
+    ownerKey && Array.isArray(prevOptions)
+      ? filterBundleOptionsForOwner(prevOptions, ownerKey, point.sensor_id, sensorsList)
+      : null;
   return mergeOwnerBundleOptions(
     buildOwnerSensorsWithData(point, sensorsList),
-    prevOptions,
+    prev?.length ? prev : null,
     anchorGeo,
-    point.sensor_id
+    point.sensor_id,
+    ownerKey
   );
+}
+
+/** Canonical owner for a device: map list first, then open popup, then URL. */
+function resolveOwnerForSensorId(sensorId, sensorsList, fallbackPoint = null) {
+  const sid = String(sensorId || "");
+  if (!sid) return "";
+
+  const list = Array.isArray(sensorsList) ? sensorsList : [];
+  const fromList = list.find((s) => String(s?.sensor_id || "") === sid);
+  const fromListOwner = normalizeOwnerKey(fromList);
+  if (fromListOwner) return fromListOwner;
+
+  const popup = sensorPoint.value;
+  if (popup && String(popup.sensor_id || "") === sid) {
+    const popupOwner = normalizeOwnerKey(popup);
+    if (popupOwner) return popupOwner;
+  }
+
+  if (fallbackPoint) {
+    const fb = normalizeOwnerKey(fallbackPoint);
+    if (fb) return fb;
+  }
+
+  return "";
 }
 
 /**
@@ -540,10 +587,11 @@ export function useSensors(localeComputed) {
         const cleanLogs = sanitizeSensorLogsPmSentinels(currentLogs);
         const anchorGeo = resolveBundleAnchorGeo(sensorPoint.value, sensors.value);
         const ownerSensorsWithData = mergeOwnerBundleOptions(
-          getOwnerSensorsWithData(sensorId, anchorGeo),
+          getOwnerSensorsWithData(sensorId, anchorGeo, sensors.value),
           sensorPoint.value?.ownerSensorsWithData,
           anchorGeo,
-          sensorId
+          sensorId,
+          normalizeOwnerKey(sensorPoint.value)
         );
         sensorPoint.value = {
           ...sensorPoint.value,
@@ -682,10 +730,11 @@ export function useSensors(localeComputed) {
         const ownerSensorsWithData = isRealtimeMode
           ? null
           : mergeOwnerBundleOptions(
-              getOwnerSensorsWithData(sensorId, anchorGeo),
+              getOwnerSensorsWithData(sensorId, anchorGeo, sensors.value),
               sensorPoint.value?.ownerSensorsWithData,
               anchorGeo,
-              sensorId
+              sensorId,
+              normalizeOwnerKey(sensorPoint.value)
             );
         sensorPoint.value = {
           ...sensorPoint.value,
@@ -768,6 +817,23 @@ export function useSensors(localeComputed) {
       return;
     }
 
+    // Mode/provider refreshes must not switch the open device (urban vs insight in one bundle).
+    const lockedSensorId = String(
+      route.query.sensor ||
+        (sensorPoint.value?.sensor_id && !options.fromMapClick ? sensorPoint.value.sensor_id : "") ||
+        ""
+    ).trim();
+    if (lockedSensorId && lockedSensorId !== String(point.sensor_id) && !options.fromMapClick) {
+      const lockedRow = sensors.value.find((s) => String(s?.sensor_id || "") === lockedSensorId);
+      point = {
+        ...point,
+        sensor_id: lockedSensorId,
+        ...(lockedRow?.owner ? { owner: lockedRow.owner } : null),
+        ...(lockedRow?.geo ? { geo: lockedRow.geo } : null),
+        ...(lockedRow?.device_model ? { device_model: lockedRow.device_model } : null),
+      };
+    }
+
     // If user just closed this popup, ignore late async updates to avoid reopening.
     if (
       recentlyClosed.value?.id &&
@@ -828,7 +894,8 @@ export function useSensors(localeComputed) {
           nextOwnerSensors,
           prevOwnerSensors,
           anchorGeo,
-          next.sensor_id || prev.sensor_id
+          next.sensor_id || prev.sensor_id,
+          normalizeOwnerKey(next) || normalizeOwnerKey(prev)
         );
 
         return {
@@ -962,14 +1029,25 @@ export function useSensors(localeComputed) {
           if (!point.owner && prevOpen.owner) {
             point.owner = prevOpen.owner;
           }
-          if (!point.ownerSensorsWithData && prevOpen.ownerSensorsWithData) {
-            point.ownerSensorsWithData = filterOwnerBundleNearAnchor(
-              prevOpen.ownerSensorsWithData,
-              resolveBundleAnchorGeo(
-                { ...point, geo: point.geo || prevOpen.geo },
-                sensors.value
+          if (
+            !point.ownerSensorsWithData &&
+            prevOpen.ownerSensorsWithData &&
+            normalizeOwnerKey(prevOpen) &&
+            normalizeOwnerKey(prevOpen) === normalizeOwnerKey(point)
+          ) {
+            const ownerKey = normalizeOwnerKey(point);
+            point.ownerSensorsWithData = filterBundleOptionsForOwner(
+              filterOwnerBundleNearAnchor(
+                prevOpen.ownerSensorsWithData,
+                resolveBundleAnchorGeo(
+                  { ...point, geo: point.geo || prevOpen.geo },
+                  sensors.value
+                ),
+                point.sensor_id
               ),
-              point.sensor_id
+              ownerKey,
+              point.sensor_id,
+              sensors.value
             );
           }
         }
@@ -1033,10 +1111,11 @@ export function useSensors(localeComputed) {
           }
           const anchorGeo = resolveBundleAnchorGeo(sensorPoint.value, sensors.value);
           const ownerSensorsWithData = mergeOwnerBundleOptions(
-            getOwnerSensorsWithData(sid, anchorGeo),
+            getOwnerSensorsWithData(sid, anchorGeo, sensors.value),
             sensorPoint.value?.ownerSensorsWithData,
             anchorGeo,
-            sid
+            sid,
+            normalizeOwnerKey(sensorPoint.value)
           );
           if (!ownerSensorsWithData?.length) return;
           sensorPoint.value = { ...sensorPoint.value, ownerSensorsWithData };
@@ -1057,6 +1136,7 @@ export function useSensors(localeComputed) {
       const nextOwnerKey = normalizeOwnerKey(sensorPoint.value);
       if (prevOwnerKey && nextOwnerKey && prevOwnerKey !== nextOwnerKey) {
         rebundleOwnerMarkers(prevOwnerKey);
+        rebundleOwnerMarkers(nextOwnerKey);
       }
       if (nextOwnerKey && sensorPoint.value) {
         syncOwnerClusterMapMarker(sensorPoint.value);
@@ -1079,6 +1159,14 @@ export function useSensors(localeComputed) {
    */
   const realtimeHydratedSid = ref(null);
   watch(
+    () => route.query.sensor,
+    (nextSid, prevSid) => {
+      if (String(nextSid || "") !== String(prevSid || "")) {
+        realtimeHydratedSid.value = null;
+      }
+    }
+  );
+  watch(
     () => [mapState.currentProvider.value, route.query.sensor, sensors.value.length],
     () => {
       if (mapState.currentProvider.value !== "realtime") return;
@@ -1094,16 +1182,33 @@ export function useSensors(localeComputed) {
       );
       if (!full) return;
 
+      const ownerKey =
+        resolveOwnerForSensorId(sid, sensors.value, full) ||
+        normalizeOwnerKey(sensorPoint.value) ||
+        "";
+
       // Patch header-critical fields only (avoid updateSensorPopup() loops).
       const next = {
         ...sensorPoint.value,
         geo: full.geo || sensorPoint.value.geo,
         model: full.model || sensorPoint.value.model,
         owner: full.owner || sensorPoint.value.owner,
+        device_model: full.device_model ?? sensorPoint.value.device_model ?? null,
         data: full.data || sensorPoint.value.data,
       };
-      sensorPoint.value = next;
+      const bundleOpts = ownerKey
+        ? applyFilteredOwnerBundleOptions({ ...next, owner: ownerKey }, null, sensors.value)
+        : null;
+      sensorPoint.value = {
+        ...next,
+        ...(ownerKey ? { owner: ownerKey } : null),
+        ...(bundleOpts?.length ? { ownerSensorsWithData: bundleOpts } : null),
+      };
       realtimeHydratedSid.value = sid;
+
+      if (ownerKey) {
+        syncOwnerClusterMapMarker(sensorPoint.value);
+      }
     },
     { immediate: true }
   );
@@ -1512,7 +1617,7 @@ export function useSensors(localeComputed) {
 
   /**
    * Popup/map: exactly one marker for the active owner cluster (5 km anchor).
-   * Clears orphan markers for bundle siblings (urban/insight) on select switches.
+   * Clears orphan markers for bundle siblings on device/owner select switches.
    */
   const syncOwnerClusterMapMarker = (point, { requireOpenPopup = true } = {}) => {
     if (!point || !sensorsUtils.isReadyLayer()) return;
@@ -1546,6 +1651,9 @@ export function useSensors(localeComputed) {
     }
 
     const idsToClear = markerIdsInAnchorCluster(clusterPool, bundleOpts, anchorGeo);
+    const activeId = String(point?.sensor_id || "");
+    if (activeId && activeId !== repId) idsToClear.add(activeId);
+
     for (const id of idsToClear) {
       if (id && id !== repId) sensorsUtils.removeMarker(id);
     }
@@ -1674,16 +1782,15 @@ export function useSensors(localeComputed) {
 
       const ownerKey = normalizeOwnerKey(point);
       if (ownerKey) {
-        if (
-          sensorPoint.value &&
-          normalizeOwnerKey(sensorPoint.value) === ownerKey
-        ) {
-          syncOwnerClusterMapMarker({
-            ...sensorPoint.value,
-            ownerSensorsWithData:
-              sensorPoint.value.ownerSensorsWithData ||
-              buildOwnerSensorsWithData(sensorPoint.value, sensors.value),
-          });
+        const popupOwner = normalizeOwnerKey(sensorPoint.value);
+        if (sensorPoint.value && popupOwner === ownerKey) {
+          const bundleOpts =
+            applyFilteredOwnerBundleOptions(sensorPoint.value, null, sensors.value) ||
+            buildOwnerSensorsWithData(sensorPoint.value, sensors.value);
+          if (bundleOpts?.length) {
+            sensorPoint.value = { ...sensorPoint.value, ownerSensorsWithData: bundleOpts };
+          }
+          syncOwnerClusterMapMarker(sensorPoint.value);
         } else {
           rebundleOwnerMarkers(ownerKey);
         }
@@ -1786,7 +1893,7 @@ export function useSensors(localeComputed) {
       // Обновляем сенсоры
       lastUpdateKey = "";
       setSensors(updatedSensors);
-      updateSensorMarkers(false);
+      updateSensorMarkers(true);
 
       if (mapState.currentUnit.value === "co2") {
         await hydrateCo2MaxFromOwnerBundle(start, end);
@@ -1809,32 +1916,56 @@ export function useSensors(localeComputed) {
     await preloadSensorMeta(sid, start, end);
 
     const ownerKey =
-      normalizeOwnerKey(sensorPoint.value) ||
-      normalizeOwnerKey({ owner: route.query.owner }) ||
-      null;
+      resolveOwnerForSensorId(sid, sensors.value, {
+        owner: route.query.owner,
+        sensor_id: sid,
+      }) || null;
+
+    const anchorGeo =
+      resolveBundleAnchorGeo(
+        isSensorOpen(sid) ? sensorPoint.value : { sensor_id: sid },
+        sensors.value
+      ) || null;
 
     if (isSensorOpen(sid) && sensorPoint.value) {
-      const merged = buildOwnerSensorsWithData(sensorPoint.value, sensors.value);
-      if (merged) {
-        sensorPoint.value = { ...sensorPoint.value, ownerSensorsWithData: merged };
-      }
+      const pointForBundle = {
+        ...sensorPoint.value,
+        sensor_id: sid,
+        owner: ownerKey || sensorPoint.value.owner,
+      };
+      const merged = applyFilteredOwnerBundleOptions(pointForBundle, null, sensors.value);
+      sensorPoint.value = {
+        ...pointForBundle,
+        ...(merged?.length ? { ownerSensorsWithData: merged } : null),
+      };
     }
 
-    const anchorGeo = resolveBundleAnchorGeo(sensorPoint.value, sensors.value);
-    const metaList = getOwnerSensorsWithData(sid, anchorGeo);
-    if (Array.isArray(metaList) && metaList.length > 0) {
+    const metaList = getOwnerSensorsWithData(sid, anchorGeo, sensors.value);
+    const scopedMeta =
+      ownerKey && Array.isArray(metaList)
+        ? filterBundleOptionsForOwner(metaList, ownerKey, sid, sensors.value)
+        : metaList;
+
+    if (Array.isArray(scopedMeta) && scopedMeta.length > 0) {
       const next = [...(sensors.value || [])];
       let added = false;
-      for (const o of metaList) {
+      for (const o of scopedMeta) {
         if (!o.hasData || !hasValidCoordinates(o.geo)) continue;
         const id = String(o.id);
-        if (next.some((s) => String(s?.sensor_id || "") === id)) continue;
+        const existing = next.find((s) => String(s?.sensor_id || "") === id);
+        if (existing) {
+          const existingOwner = normalizeOwnerKey(existing);
+          if (ownerKey && existingOwner && existingOwner !== ownerKey) continue;
+          continue;
+        }
+        if (!ownerKey) continue;
         next.push(
           formatPointForSensor(
             {
               sensor_id: id,
               geo: o.geo,
               owner: ownerKey,
+              device_model: o.device_model || null,
               model: DEFAULT_SENSOR_MODEL,
               timestamp: Math.floor(Date.now() / 1000),
             },
@@ -1883,6 +2014,8 @@ export function useSensors(localeComputed) {
       }
       lastUpdateKey = "";
       lastLoadProvider = provider;
+      clearSensorMetaCache();
+      realtimeHydratedSid.value = null;
     }
 
     clearSensors();
@@ -1976,20 +2109,18 @@ export function useSensors(localeComputed) {
 
   // Функции для управления локальными данными
   const setSensors = (sensorsArr) => {
-    const arr = Array.isArray(sensorsArr) ? sensorsArr : [];
-    sensors.value =
-      mapState.currentProvider.value === "remote" ? dedupeSensorsForMap(arr) : arr;
+    sensors.value = Array.isArray(sensorsArr) ? sensorsArr : [];
     sensorsLoaded.value = true;
   };
 
   const setSensorsNoLocation = (sensorsArr) => {
-    const arr = Array.isArray(sensorsArr) ? sensorsArr : [];
-    sensorsNoLocation.value =
-      mapState.currentProvider.value === "remote" ? dedupeSensorsForMap(arr) : arr;
+    sensorsNoLocation.value = Array.isArray(sensorsArr) ? sensorsArr : [];
   };
 
   const clearSensors = () => {
     realtimeLiveSensorIds.value = new Set();
+    realtimeHydratedSid.value = null;
+    clearSensorMetaCache();
     sensors.value = [];
     sensorsNoLocation.value = [];
     sensorsLoaded.value = false;

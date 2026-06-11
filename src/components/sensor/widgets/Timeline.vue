@@ -300,17 +300,16 @@ const selectOwnerSensor = (id) => {
     return;
   }
 
-  const cachedOwner =
-    sensorsUI?.sensors?.value?.find?.((s) => String(s?.sensor_id || "") === nextId)?.owner || null;
+  const sensorsList = Array.isArray(sensorsUI?.sensors?.value) ? sensorsUI.sensors.value : [];
+  const nextRow = sensorsList.find((s) => String(s?.sensor_id || "") === nextId);
+  const nextOwner = nextRow?.owner || props.point?.owner || null;
 
   mapState.setMapSettings(route, router, {
     lat: props.point?.geo?.lat ?? route.query.lat,
     lng: props.point?.geo?.lng ?? route.query.lng,
     zoom: route.query.zoom ?? 18,
     sensor: nextId,
-    // Keep existing owner in URL (if known); ensureOwnerLoaded will fill it if missing.
-    owner:
-      props.point?.owner || cachedOwner ? String(props.point?.owner || cachedOwner) : undefined,
+    owner: nextOwner ? String(nextOwner) : undefined,
   });
   try {
     sensorsUI?.ensureOwnerLoaded?.(nextId);
@@ -318,13 +317,30 @@ const selectOwnerSensor = (id) => {
       if (!sensorsUI?.sensorPoint?.value) return;
       if (mapState.currentProvider.value === "realtime") {
         await sensorsUI?.hydrateOwnerBundleForRealtime?.(nextId);
-      } else if (props.point?.owner && sensorsUI?.syncOwnerClusterMapMarker) {
-        sensorsUI.syncOwnerClusterMapMarker({
-          ...props.point,
-          sensor_id: nextId,
-          ownerSensorsWithData: props.point?.ownerSensorsWithData,
-        });
+        if (sensorsUI?.sensorPoint?.value) {
+          sensorsUI?.refreshOpenSensorMapMarker?.();
+        }
+        return;
       }
+      const ownerKey = String(nextOwner || sensorsUI.sensorPoint.value?.owner || "").trim();
+      if (!ownerKey || !sensorsUI?.syncOwnerClusterMapMarker) return;
+
+      const anchorGeo =
+        props.point?.geo ||
+        nextRow?.geo ||
+        sensorsUI.sensorPoint.value?.geo ||
+        null;
+      const nextPoint = {
+        ...props.point,
+        sensor_id: nextId,
+        owner: ownerKey,
+        geo: anchorGeo,
+      };
+      const bundleOpts = sensorsUI.buildOwnerSensorsWithData?.(nextPoint, sensorsList);
+      sensorsUI.syncOwnerClusterMapMarker({
+        ...nextPoint,
+        ownerSensorsWithData: bundleOpts || props.point?.ownerSensorsWithData,
+      });
       if (sensorsUI?.sensorPoint?.value) {
         sensorsUI?.refreshOpenSensorMapMarker?.();
       }
@@ -385,21 +401,33 @@ const handleTimelineModeChange = (mode) => {
     sensorsUI.clearSensorLogs(props.point.sensor_id);
   }
 
+  const activeSensorId = props.point?.sensor_id || route.query.sensor;
+  const activeOwner = props.point?.owner || route.query.owner;
+
   if (mode === "realtime") {
-    // Переключаемся на realtime провайдер с текущей датой
     mapState.setMapSettings(route, router, {
       provider: "realtime",
-      date: dayISO(), // Устанавливаем текущую дату
+      date: dayISO(),
+      sensor: activeSensorId || undefined,
+      owner: activeOwner || undefined,
     });
-    mapState.setTimelineMode("realtime");
-    if (props.point?.sensor_id) {
-      void sensorsUI?.hydrateOwnerBundleForRealtime?.(props.point.sensor_id);
+    mapState.setTimelineMode("realtime", activeSensorId);
+    if (activeSensorId) {
+      void sensorsUI?.hydrateOwnerBundleForRealtime?.(activeSensorId).then(() => {
+        sensorsUI?.refreshOpenSensorMapMarker?.();
+      });
     }
   } else {
-    mapState.setMapSettings(route, router, { provider: "remote" });
-    mapState.setTimelineMode(mode, props.point?.sensor_id);
-    if (props.point?.sensor_id) {
-      void sensorsUI.updateSensorLogs(props.point.sensor_id);
+    mapState.setMapSettings(route, router, {
+      provider: "remote",
+      sensor: activeSensorId || undefined,
+      owner: activeOwner || undefined,
+    });
+    mapState.setTimelineMode(mode, activeSensorId);
+    if (activeSensorId) {
+      void sensorsUI.updateSensorLogs(activeSensorId).then(() => {
+        sensorsUI?.refreshOpenSensorMapMarker?.();
+      });
     }
   }
 };

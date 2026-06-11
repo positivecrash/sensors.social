@@ -95,7 +95,7 @@ class Provider {
   async getSensorsForPeriod(start, end) {
     try {
       const result = await fetchJson(
-        `${settings.REMOTE_PROVIDER}api/v2/sensor/urban/${start}/${end}`,
+        `${settings.REMOTE_PROVIDER}api/v2/sensor/markers/${start}/${end}`,
         { cache: "no-store" }
       );
       return result?.result || [];

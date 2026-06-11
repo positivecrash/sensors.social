@@ -108,13 +108,20 @@ export function listBundleSensorIds(meta) {
   return listBundleSensorEntries(meta).map((e) => e.sensor_id);
 }
 
-/** Device role for map rep — never use maxdata.co2 (hydrated from Insight siblings). */
+/** Device role for map rep — use device_model first;  */
 export function isInsightMapDevice(sensor) {
   const dm = String(sensor?.device_model || "").toLowerCase();
   if (dm === "insight") return true;
   if (dm === "urban" || dm === "altruist") return false;
-  const liveCo2 = Number(sensor?.data?.co2);
-  return Number.isFinite(liveCo2);
+  const co2 = Number(sensor?.data?.co2);
+  const noise = Number(
+    sensor?.data?.noisemax ?? sensor?.data?.noiseavg ?? sensor?.data?.noise
+  );
+  const hasCo2 = Number.isFinite(co2);
+  const hasNoise = Number.isFinite(noise);
+  if (hasCo2 && !hasNoise) return true;
+  if (hasNoise && !hasCo2) return false;
+  return false;
 }
 
 /**
@@ -343,6 +350,7 @@ export async function getSensors(start, end, provider = "remote") {
         address: sensorData.address || null,
         donated_by: sensorData.donated_by || null,
         owner: normalizeOwnerKey(sensorData) || null,
+        device_model: sensorData.device_model || null,
         timestamp: sensorData.timestamp || null,
       };
 
@@ -359,94 +367,16 @@ export async function getSensors(start, end, provider = "remote") {
     const filteredSensors = filterSensorsByConfig(sensors);
     const filteredSensorsNoLocation = filterSensorsByConfig(sensorsNoLocation);
 
-    const ownerDedupedSensors = dedupeByOwnerProximity(filteredSensors);
-    const ownerDedupedSensorsNoLocation = dedupeByOwnerProximity(filteredSensorsNoLocation);
-
     const bounds = getConfigBounds(settings);
-    const bounded = filterByBounds(ownerDedupedSensors, bounds);
-    const enriched = await enrichMapSensorsWithOwnerBundleDevices(bounded, start, end);
     return {
-      sensors: enriched,
-      sensorsNoLocation: filterByBounds(ownerDedupedSensorsNoLocation, bounds),
+      sensors: filterByBounds(filteredSensors, bounds),
+      sensorsNoLocation: filterByBounds(filteredSensorsNoLocation, bounds),
     };
   }
 }
 
 /**
- * Daily recap map list is urban-only; merge Insight/Altruist siblings from owner v2 meta
- * when they share a geo cluster with an urban row already on the map.
- */
-export async function enrichMapSensorsWithOwnerBundleDevices(sensors, start, end) {
-  const list = Array.isArray(sensors) ? [...sensors] : [];
-  if (list.length === 0) return list;
-
-  const seen = new Set(list.map((s) => String(s?.sensor_id || "")));
-  const byOwner = new Map();
-  for (const s of list) {
-    const owner = normalizeOwnerKey(s);
-    if (!owner) continue;
-    if (!byOwner.has(owner)) byOwner.set(owner, []);
-    byOwner.get(owner).push(s);
-  }
-
-  const queue = [...byOwner.entries()];
-  if (queue.length === 0) return list;
-
-  const CONCURRENCY = 6;
-
-  const work = async ([owner, members]) => {
-    const seed = pickOwnerClusterRepresentative(members) || members[0];
-    if (!seed?.sensor_id) return;
-
-    try {
-      const meta = await preloadSensorMeta(seed.sensor_id, start, end);
-      const data = meta?.data;
-      if (!data || typeof data !== "object") return;
-
-      for (const { sensor_id, device_model } of listBundleSensorEntries(meta)) {
-        const id = String(sensor_id || "");
-        if (!id || seen.has(id)) continue;
-
-        const points = Array.isArray(data[id]) ? data[id] : [];
-        if (points.length === 0) continue;
-
-        const geo = geoFromLogPoints(points);
-        if (!hasValidCoordinates(geo)) continue;
-
-        const nearMember = members.some(
-          (m) =>
-            hasValidCoordinates(m?.geo) && haversineKm(m.geo, geo) <= OWNER_GEO_CLUSTER_KM
-        );
-        if (!nearMember) continue;
-
-        list.push({
-          sensor_id: id,
-          model: 2,
-          geo: { lat: Number(geo.lat), lng: Number(geo.lng) },
-          owner,
-          device_model: device_model || null,
-          timestamp: Number(points[points.length - 1]?.timestamp) || null,
-        });
-        seen.add(id);
-      }
-    } catch (e) {
-      console.warn("enrichMapSensorsWithOwnerBundleDevices", owner, e);
-    }
-  };
-
-  const runners = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
-    while (queue.length > 0) {
-      const item = queue.shift();
-      if (item) await work(item);
-    }
-  });
-  await Promise.allSettled(runners);
-
-  return dedupeByOwnerProximity(list);
-}
-
-/**
- * Fetch a single sensor "meta" row (geo/model/owner/timestamp) from the v2 period list.
+ * Fetch a single sensor "meta" row (geo/model/owner/timestamp) from the v2 markers period list.
  * Useful when a sensor is bundled away by owner-dedupe, but the UI needs to force-show it.
  */
 export async function getSensorMetaFromPeriod(sensorId, start, end) {
@@ -467,6 +397,7 @@ export async function getSensorMetaFromPeriod(sensorId, start, end) {
             address: sensorData.address || null,
             donated_by: sensorData.donated_by || null,
             owner: normalizeOwnerKey(sensorData) || null,
+            device_model: sensorData.device_model || null,
             timestamp: sensorData.timestamp || null,
           };
         }
@@ -576,19 +507,20 @@ function geoFromLogPoints(points) {
   return geo;
 }
 
-/** Index v2 bundle meta under every device id in the owner bundle. */
+/** Cache v2 meta only for the requested device id. */
 function cacheSensorMetaForBundle(requestedId, meta) {
   if (!meta || typeof meta !== "object") return;
   const req = requestedId ? String(requestedId) : "";
   if (req) latestSensorMetaById.set(req, meta);
-  for (const { sensor_id } of listBundleSensorEntries(meta)) {
-    if (sensor_id) latestSensorMetaById.set(String(sensor_id), meta);
-  }
 }
 
 export function getCachedSensorMeta(sensorId) {
   if (!sensorId) return null;
   return latestSensorMetaById.get(String(sensorId)) || null;
+}
+
+export function clearSensorMetaCache() {
+  latestSensorMetaById.clear();
 }
 
 /**
@@ -636,6 +568,73 @@ export function computeMaxCo2FromMeta(meta, sensorId, sensorGeo, maxKm = OWNER_G
 
   return max;
 }
+
+function ownerBySensorIdFromList(sensorsList) {
+  const map = new Map();
+  for (const s of Array.isArray(sensorsList) ? sensorsList : []) {
+    const id = String(s?.sensor_id || "");
+    const owner = normalizeOwnerKey(s);
+    if (id && owner) map.set(id, owner);
+  }
+  return map;
+}
+
+function bundleIdsFromMeta(meta, ownerKey) {
+  if (!meta) return null;
+  const owner = String(ownerKey || "").trim();
+  const metaOwner = normalizeOwnerKey(meta);
+  if (owner && metaOwner && metaOwner !== owner) return null;
+  const ids = new Set();
+  for (const { sensor_id } of listBundleSensorEntries(meta)) {
+    const id = String(sensor_id || "");
+    if (id) ids.add(id);
+  }
+  return ids.size > 0 ? ids : null;
+}
+
+/** Owner-device select: only devices from the active owner's v2 bundle and map list. */
+export function filterBundleOptionsForOwner(items, ownerKey, activeSensorId, sensorsList) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  const owner = String(ownerKey || "").trim();
+  if (!owner || list.length === 0) return list;
+
+  const sid = String(activeSensorId || "");
+  const allowed = new Set();
+  const canonicalOwners = ownerBySensorIdFromList(sensorsList);
+
+  const meta = sid ? getCachedSensorMeta(sid) : null;
+  const bundleIds = bundleIdsFromMeta(meta, owner);
+  if (bundleIds) {
+    for (const id of bundleIds) {
+      const listedOwner = canonicalOwners.get(id);
+      if (listedOwner && listedOwner !== owner) continue;
+      allowed.add(id);
+    }
+  }
+
+  for (const [id, listedOwner] of canonicalOwners) {
+    if (listedOwner === owner) allowed.add(id);
+  }
+
+  if (allowed.size === 0) {
+    return sid ? list.filter((o) => String(o?.id || "") === sid) : [];
+  }
+
+  const filtered = list.filter((o) => {
+    const id = String(o?.id || "");
+    if (!id || !allowed.has(id)) return false;
+    const listedOwner = canonicalOwners.get(id);
+    return !listedOwner || listedOwner === owner;
+  });
+
+  if (sid && !filtered.some((o) => String(o.id) === sid)) {
+    const self = list.find((o) => String(o.id) === sid);
+    if (self) return [self, ...filtered];
+  }
+
+  return filtered.length > 0 ? filtered : list;
+}
+
 /**
  * Keep only owner-bundle siblings within `maxKm` of the anchor. Never widen to other cities.
  */
@@ -650,7 +649,7 @@ export function filterOwnerBundleNearAnchor(items, anchorGeo, activeSensorId, ma
   return withGeo.filter((o) => haversineKm(anchorGeo, o.geo) <= maxKm);
 }
 
-export function getOwnerSensorsWithData(sensorId, anchorGeoOverride = null) {
+export function getOwnerSensorsWithData(sensorId, anchorGeoOverride = null, sensorsList = null) {
   if (!sensorId) return null;
   const meta = getCachedSensorMeta(sensorId);
   // Meta may not be loaded yet (async preload). Return null so callers can
@@ -658,25 +657,33 @@ export function getOwnerSensorsWithData(sensorId, anchorGeoOverride = null) {
   if (!meta) return null;
   const data = meta?.data && typeof meta.data === "object" ? meta.data : {};
   const sid = String(sensorId);
+  const metaOwner = normalizeOwnerKey(meta);
+  const canonicalOwners = ownerBySensorIdFromList(sensorsList);
 
   const anchorGeo =
     (anchorGeoOverride && hasValidCoordinates(anchorGeoOverride) ? anchorGeoOverride : null) ||
     geoFromLogPoints(data?.[sid]) ||
     null;
 
-  const mapped = listBundleSensorEntries(meta).map(({ sensor_id, device_model }) => {
-    const id = String(sensor_id);
-    const points = Array.isArray(data[id]) ? data[id] : [];
-    const hasData = points.length > 0;
-    const geo = geoFromLogPoints(points);
-    return {
-      id,
-      hasData: hasData && hasValidCoordinates(geo),
-      type: hasData && hasValidCoordinates(geo) ? sensorTypeFromDeviceModel(device_model, points) : null,
-      geo: hasValidCoordinates(geo) ? geo : null,
-      device_model: device_model || null,
-    };
-  });
+  const mapped = listBundleSensorEntries(meta)
+    .map(({ sensor_id, device_model }) => {
+      const id = String(sensor_id);
+      const points = Array.isArray(data[id]) ? data[id] : [];
+      const hasData = points.length > 0;
+      const geo = geoFromLogPoints(points);
+      return {
+        id,
+        hasData: hasData && hasValidCoordinates(geo),
+        type: hasData && hasValidCoordinates(geo) ? sensorTypeFromDeviceModel(device_model, points) : null,
+        geo: hasValidCoordinates(geo) ? geo : null,
+        device_model: device_model || null,
+      };
+    })
+    .filter((entry) => {
+      const listedOwner = canonicalOwners.get(entry.id);
+      if (listedOwner && metaOwner && listedOwner !== metaOwner) return false;
+      return true;
+    });
 
   const filtered = filterOwnerBundleNearAnchor(mapped, anchorGeo, sid);
   return filtered.length > 0 ? filtered : null;
