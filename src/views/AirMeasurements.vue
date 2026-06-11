@@ -10,10 +10,10 @@
   />
   <PageTextLayout>
     <div class="pagetext-prose">
-      <header class="pagetext-header">
+      <div class="pagetext-header">
         <div class="pagetext-eyebrow">sensors.social</div>
         <h1 class="pagetext-title">{{ $t("measures.title") }}</h1>
-      </header>
+      </div>
 
       <section v-for="(measurement, key) in measurements" :key="key" :id="key.toUpperCase()">
         <template

@@ -10,7 +10,7 @@
   />
   <PageTextLayout>
     <div class="pagetext-prose">
-      <header class="pagetext-header">
+      <div class="pagetext-header">
         <div class="pagetext-eyebrow">sensors.social</div>
         <h1 class="pagetext-title">{{ $t("Who Altruist Was Created For") }}</h1>
         <p class="pagetext-subtitle">
@@ -20,7 +20,7 @@
             )
           }}
         </p>
-      </header>
+      </div>
 
       <section>
         <h2>🏙️ {{ $t("You live in a big city or an ecologically challenged region") }}</h2>

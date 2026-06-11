@@ -60,8 +60,9 @@ import { dayISO } from "@/utils/date";
 import {
   fetchStoryList,
   getAllStoriesFlat,
-  isStoryHidden,
+  isStoryVisibleInHeader,
   normalizeBackendStory,
+  storiesHeaderWindowStartMs,
   preferredUnitByStoryIcon,
   upsertStory,
   readSeenSet,
@@ -138,7 +139,11 @@ async function refreshRemoteStories() {
     // Backend is the source-of-truth for the global feed.
     // We still merge in local cache below so freshly published stories can appear immediately
     // even before the indexer catches up.
-    const { list } = await fetchStoryList({ limit: 50, page: 1 });
+    const { list } = await fetchStoryList({
+      limit: 50,
+      page: 1,
+      start: storiesHeaderWindowStartMs(),
+    });
     const normalized = (list || []).map((r) => normalizeBackendStory(r)).filter(Boolean);
     remoteStories.value = normalized;
 
@@ -172,8 +177,7 @@ const stories = computed(() => {
   const all = Array.from(byKey.values());
   if (!all.length) return [];
 
-  // Hard hide list for “do not show in feed” items (by sensorId+timestamp pair).
-  const visible = all.filter((s) => !isStoryHidden(s));
+  const visible = all.filter((s) => isStoryVisibleInHeader(s));
   if (!visible.length) return [];
 
   visible.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

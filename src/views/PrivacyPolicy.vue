@@ -2,13 +2,13 @@
   <MetaInfo pageTitle="Sensors.social Privacy Policy" pageImage="/og-privacy-policy.webp" />
   <PageTextLayout>
     <div class="pagetext-prose">
-      <header class="pagetext-header">
+      <div class="pagetext-header">
         <div class="pagetext-eyebrow">sensors.social</div>
         <h1 class="pagetext-title">{{ $t("privacypolicy.title") }}</h1>
         <p class="pagetext-subtitle">
           {{ $t("privacypolicy.description") }}
         </p>
-      </header>
+      </div>
 
       <div class="privacy-policy__wrapper">
         <h2 class="privacy-policy__subtitle">{{ $t("privacypolicy.subtitle1") }}</h2>

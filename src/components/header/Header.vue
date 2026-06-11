@@ -225,8 +225,8 @@ const filterSensors = (sensors) => {
 const sensorsNoLocation = computed(() => filterSensors(sensorsData.sensorsNoLocation));
 
 /** No-geo rows in the counter total (owner-deduped). */
-const mapNoLocationCount = computed(() =>
-  dedupeSensorsForMap(sensorsNoLocation.value || []).length
+const mapNoLocationCount = computed(
+  () => dedupeSensorsForMap(sensorsNoLocation.value || []).length
 );
 
 /** Always owner-bundled map dots (single source: useSensors). */
@@ -291,7 +291,7 @@ header {
   left: 0;
   position: sticky;
   top: 0;
-  width: 100vw;
+  width: 99vw;
   z-index: 99;
   pointer-events: none;
   box-shadow: 0 6px 12px -4px rgba(0, 0, 0, 0.12);

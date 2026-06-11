@@ -95,6 +95,32 @@ export const HIDDEN_FEED_STORIES = [
   { sensorId: "4H7Rrya6F86J7QRaqWfFwGwcS67aQxFdUuaSMCjT7U78HyHb", timestamp: 1775729752941 }
 ];
 
+/** Header carousel: hide stories older than this (sensor popup keeps full history). */
+export const STORIES_HEADER_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+export function getStoryTimeMs(story) {
+  const ts = story?.timestamp != null ? Number(story.timestamp) : null;
+  if (ts != null && !Number.isNaN(ts)) return ts;
+  const created = story?.createdAt;
+  if (created) {
+    const ms = new Date(created).getTime();
+    if (!Number.isNaN(ms)) return ms;
+  }
+  return null;
+}
+
+/** Whether a story should appear in the header feed (not hidden, within 2 weeks). */
+export function isStoryVisibleInHeader(story) {
+  if (isStoryHidden(story)) return false;
+  const ms = getStoryTimeMs(story);
+  if (ms == null) return true;
+  return Date.now() - ms <= STORIES_HEADER_TTL_MS;
+}
+
+export function storiesHeaderWindowStartMs(now = Date.now()) {
+  return now - STORIES_HEADER_TTL_MS;
+}
+
 // Global denylist for specific story instances (sensorId + timestamp).
 // Used by feed *and* sensor popup lists.
 export function isStoryHidden(story) {
@@ -342,6 +368,10 @@ export function useStories() {
     unwrapBackendStoryPayload,
     normalizeBackendStory,
     HIDDEN_FEED_STORIES,
+    STORIES_HEADER_TTL_MS,
+    getStoryTimeMs,
+    isStoryVisibleInHeader,
+    storiesHeaderWindowStartMs,
     isStoryHidden,
     preferredUnitByStoryIcon,
     sendStoryToDatalog,

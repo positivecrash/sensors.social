@@ -10,15 +10,13 @@
   />
   <PageTextLayout>
     <div class="deviceinfo pagetext-prose">
-      <header class="pagetext-header">
+      <div class="pagetext-header">
         <div class="pagetext-eyebrow">sensors.social</div>
         <h1 class="pagetext-title">{{ $t("Altruist & sensors.social") }}</h1>
         <div class="pagetext-subtitle">
           <p>
             {{
-              $t(
-                "You track your pulse and sleep quality. Now learn about your living environment."
-              )
+              $t("You track your pulse and sleep quality. Now learn about your living environment.")
             }}
           </p>
           <p>
@@ -29,7 +27,7 @@
             }}
           </p>
         </div>
-      </header>
+      </div>
 
       <section>
         <h2>{{ $t("The Challenge: Measure Your Living Environment") }}</h2>
@@ -500,5 +498,4 @@ onMounted(() => {
 :global(.container-pagetext) > .deviceinfo {
   max-width: 100%;
 }
-
 </style>

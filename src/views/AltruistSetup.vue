@@ -10,7 +10,7 @@
   />
   <PageTextLayout>
     <div class="pagetext-prose">
-      <header class="pagetext-header">
+      <div class="pagetext-header">
         <div class="pagetext-eyebrow">sensors.social</div>
         <h1 class="pagetext-title">{{ $t("Altruist Setup Guide") }}</h1>
         <p class="pagetext-subtitle">
@@ -20,7 +20,7 @@
             )
           }}
         </p>
-      </header>
+      </div>
 
       <nav class="setup-nav">
         <a class="setup-navlink" href="#urban">{{ $t("Altruist Urban") }}</a>
@@ -386,7 +386,7 @@
         <h2>{{ $t("Technical Specifications") }}</h2>
 
         <h3>{{ $t("Altruist Urban") }}</h3>
-      <div class="pagetext-table-scroll">
+        <div class="pagetext-table-scroll">
           <table>
             <tbody>
               <tr>
@@ -428,7 +428,7 @@
         </div>
 
         <h3>{{ $t("Altruist Insight") }}</h3>
-      <div class="pagetext-table-scroll">
+        <div class="pagetext-table-scroll">
           <table>
             <tbody>
               <tr>
@@ -692,5 +692,4 @@ onMounted(() => {
     grid-template-columns: 1fr;
   }
 }
-
 </style>

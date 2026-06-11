@@ -10,7 +10,7 @@
   />
   <PageTextLayout>
     <div class="blog-list">
-      <header class="pagetext-header">
+      <div class="pagetext-header">
         <div class="pagetext-eyebrow">sensors.social</div>
         <h1 class="pagetext-title">{{ $t("Blog") }}</h1>
         <p class="pagetext-subtitle">
@@ -20,7 +20,7 @@
             )
           }}
         </p>
-      </header>
+      </div>
       <div class="blog-list__grid" :class="posts.length < 3 ? 'blog-list__grid--small' : ''">
         <router-link
           v-for="post in posts"

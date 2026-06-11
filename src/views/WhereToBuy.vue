@@ -5,7 +5,7 @@
     pageImage="/og-default.webp"
   />
   <PageTextLayout>
-    <header class="pagetext-header">
+    <div class="pagetext-header">
       <div class="pagetext-eyebrow">sensors.social</div>
       <h1 class="pagetext-title">{{ $t("Where to buy air monitor Altruist") }}</h1>
       <p class="pagetext-subtitle">
@@ -15,7 +15,7 @@
           )
         }}
       </p>
-    </header>
+    </div>
 
     <section class="shops">
       <a
