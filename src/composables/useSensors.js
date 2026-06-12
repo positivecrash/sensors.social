@@ -435,11 +435,11 @@ export function useSensors(localeComputed) {
   };
 
   const ensureOwnerLoaded = (sensorId) => {
-    if (!sensorId) return;
-
+    if (!sensorId) return Promise.resolve(null);
+    
     // Проверяем, есть ли owner уже в списке сенсоров
     const existing = sensors.value.find((s) => s.sensor_id === sensorId);
-    if (existing && existing.owner) {
+    if (existing?.owner) {
       return Promise.resolve(existing.owner);
     }
 
@@ -455,12 +455,6 @@ export function useSensors(localeComputed) {
           const existsOnMap = sensors.value?.some((s) => s?.sensor_id === sensorId);
           if (existsOnMap) {
             setSensorData(sensorId, { owner });
-          }
-          if (sensorPoint.value && sensorPoint.value.sensor_id === sensorId) {
-            sensorPoint.value = {
-              ...sensorPoint.value,
-              owner,
-            };
           }
           // Add `owner=` to URL whenever we actually know it.
           // This is independent of `sensor=` (we may open popup without sensor in URL).
@@ -992,8 +986,25 @@ export function useSensors(localeComputed) {
    * @param {Object} [point.maxdata] - Максимальные данные
    * @param {Object} [point.data] - Текущие данные
    */
-  const updateSensorPopup = (point, options = {}) => {
+  const updateSensorPopup = async (point, options = {}) => {
+
+
     if (!point.sensor_id) {
+      return;
+    }
+
+    // проверка, что попап не закрыли
+    // вызываем после любого await — снова: попап могли закрыть, пока ждали
+    const isStalePopupUpdate = () => {
+      if (route.query.sensor !== point.sensor_id) return true;
+      const closed = recentlyClosed.value;
+      // Попап только что закрыли — URL может ещё не успеть обновиться
+      return (
+        closed?.id === point.sensor_id && Date.now() < (closed.until || 0)
+      );
+    };
+
+    if (isStalePopupUpdate()) {
       return;
     }
 
@@ -1012,15 +1023,6 @@ export function useSensors(localeComputed) {
         ...(lockedRow?.geo ? { geo: lockedRow.geo } : null),
         ...(lockedRow?.device_model ? { device_model: lockedRow.device_model } : null),
       };
-    }
-
-    // If user just closed this popup, ignore late async updates to avoid reopening.
-    if (
-      recentlyClosed.value?.id &&
-      recentlyClosed.value.id === point.sensor_id &&
-      Date.now() < (recentlyClosed.value.until || 0)
-    ) {
-      return;
     }
 
     // If URL no longer points to this sensor (e.g. popup was closed),
@@ -1168,13 +1170,23 @@ export function useSensors(localeComputed) {
         });
       }
 
-      // Загружаем owner, если он отсутствует
-      if (!point.owner) {
-        ensureOwnerLoaded(point.sensor_id);
+      // проверяем есть ли изменения в данных сенсора
+      const foundSensor = sensors.value.find((s) => s.sensor_id === point.sensor_id);
+
+      // загружаем owner синхронно, еслиуже пришел
+      if (!point.owner && foundSensor?.owner) {
+        point.owner = foundSensor.owner;
       }
 
-      // Проверяем есть ли изменения в данных сенсора
-      const foundSensor = sensors.value.find((s) => s.sensor_id === point.sensor_id);
+      // загружаем асинхронно, если не пришел
+      if (!point.owner) {
+        point.owner = await ensureOwnerLoaded(point.sensor_id);
+      }
+
+      if (isStalePopupUpdate()) {
+        return;
+      }
+
       const isNewPopup = !isSensorOpen(point.sensor_id);
       const isRealtime = mapState.currentProvider.value === "realtime";
       const hasDataChanges =
@@ -1185,8 +1197,13 @@ export function useSensors(localeComputed) {
         foundSensor.geo.lng !== point.geo.lng ||
         (!isRealtime && foundSensor.address !== point.address);
 
+      const ownerChanged =
+        sensorPoint.value?.sensor_id === point.sensor_id &&
+        point.owner &&
+        sensorPoint.value?.owner !== point.owner;
+
       // Если попап не открыт для того же сенсора ИЛИ есть изменения в данных
-      if (isNewPopup || hasDataChanges) {
+      if (isNewPopup || hasDataChanges || ownerChanged) {
         if (isNewPopup) {
           mapState.mapinactive.value = true;
         }

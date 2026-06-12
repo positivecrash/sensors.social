@@ -459,9 +459,9 @@ export async function getSensorOwner(sensorId) {
   if (!sensorId) return null;
 
   try {
-    // Используем короткий промежуток времени - последний час
+    // Используем короткий промежуток времени - последний час (unix seconds, как в остальных API)
     const end = Math.floor(Date.now() / 1000);
-    const start = end - 3600; // 1 час назад (seconds)
+    const start = end - 3600;
 
     // Делаем прямой запрос, чтобы получить полный объект ответа с sensor.owner
     const result = await fetchJson(
