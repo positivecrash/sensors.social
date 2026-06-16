@@ -1,10 +1,49 @@
 <template>
   <div class="analytics-tab">
-    <Timeline :log="log" :point="point">
-      <!-- <template #actions>
-        <NativeShare />
-      </template> -->
-    </Timeline>
+
+    <div class="panel">
+      <SensorPicker v-if="isSensorPickerReady" :point="point" :log="log" />
+      <div v-else class="panel-skeleton panel-skeleton--trigger" aria-hidden="true" />
+
+      <Timeline v-if="!isLogsLoading" :log="log" :point="point" />
+      <div v-else class="panel-skeleton panel-skeleton--timeline" aria-hidden="true" />
+
+      <button
+        v-if="ownerKey"
+        type="button"
+        class="panel-trigger panel-trigger--owner"
+        popovertarget="data-owner-popover"
+      >
+        <div class="panel-list__media panel-list__media--round" aria-hidden="true">
+          <img v-if="ownerAvatar" :src="ownerAvatar" alt="" />
+        </div>
+        <div class="panel-list__text">
+          <b class="panel-list__title">{{ t("sensorpopup.infosensorowner") }}</b>
+          <span class="panel-list__meta">{{ formatSensorIdShort(ownerKey) }}</span>
+        </div>
+        <font-awesome-icon icon="fa-solid fa-caret-down" class="panel-trigger__caret" aria-hidden="true" />
+      </button>
+      <div v-else-if="isOwnerLoading" class="panel-skeleton panel-skeleton--trigger" aria-hidden="true" />
+      <div id="data-owner-popover" class="popover panel-popover panel-popover--end" popover>
+        <div class="panel-list__item panel-list__item--static">
+          <div class="panel-list__media panel-list__media--round" aria-hidden="true">
+            <img v-if="ownerAvatar" :src="ownerAvatar" alt="" />
+          </div>
+          <div class="panel-list__text">
+            <b class="panel-list__title">{{ t("sensorpopup.infosensorowner") }}</b>
+            <span class="panel-list__meta">{{ formatSensorIdShort(ownerKey) }}</span>
+          </div>
+        </div>
+        <p v-if="isOwnerLoggedIn" class="panel-popover__footer">
+          {{ t("Share your insights with the community!") }}
+        </p>
+        <p v-else class="panel-popover__footer">
+          {{ t("To add info and stories") }}
+          <router-link to="/login/">{{ t("Login") }}</router-link>
+        </p>
+      </div>
+    </div>
+
 
     <section
       v-if="
@@ -111,7 +150,9 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMap } from "@/composables/useMap";
-import { useSensors } from "@/composables/useSensors";
+import { useSensors, formatSensorIdShort, isPanelSensorPickerReady, isPanelOwnerLoading, isSensorLogsLoading } from "@/composables/useSensors";
+import { useAccounts } from "@/composables/useAccounts";
+import { getAvatar } from "@/utils/avatarGenerator";
 import {
   clearAllLogsHealthUserHide,
   loadLogsHealth,
@@ -124,6 +165,7 @@ import measurements from "../../../measurements";
 
 import AQI from "../widgets/AQI.vue";
 import Chart from "../widgets/Chart.vue";
+import SensorPicker from "../widgets/SensorPicker.vue";
 import Timeline from "../widgets/Timeline.vue";
 // import NativeShare from "../widgets/NativeShare.vue";
 
@@ -134,9 +176,37 @@ const props = defineProps({
 
 const { t } = useI18n();
 const mapState = useMap();
+const accountStore = useAccounts();
 const localeComputed = computed(() => localStorage.getItem("locale") || "en");
 const { logsProgress, runLogsHealth } = useSensors(localeComputed);
 const { logsHealth, logsHealthMeta } = useLogsHealth();
+
+const ownerKey = computed(() => String(props.point?.owner || "").trim());
+const ownerAvatar = ref(null);
+
+const isSensorPickerReady = computed(() => isPanelSensorPickerReady(props.point));
+const isOwnerLoading = computed(() => isPanelOwnerLoading(props.point));
+const isLogsLoading = computed(() =>
+  isSensorLogsLoading(props.point, props.log, {
+    provider: mapState.currentProvider.value,
+    timelineMode: mapState.timelineMode.value,
+  })
+);
+
+const isOwnerLoggedIn = computed(() => {
+  const owner = ownerKey.value;
+  if (!owner) return false;
+  const accounts = Array.isArray(accountStore.accounts?.value) ? accountStore.accounts.value : [];
+  return accounts.some((acc) => String(acc?.address || "").trim() === owner);
+});
+
+watch(
+  ownerKey,
+  async (addr) => {
+    ownerAvatar.value = addr ? await getAvatar(addr, 44) : null;
+  },
+  { immediate: true }
+);
 
 const chartLogsHealthUi = computed(() => (runLogsHealth.value ? logsHealth.value : null));
 
@@ -353,6 +423,24 @@ watch(
   }
 }
 
+
+/* - Top panel */
+.panel-trigger--owner {
+  anchor-name: --data-owner-trigger;
+}
+
+@supports (position-anchor: --data-owner-trigger) {
+  .panel-popover--end {
+    position-anchor: --data-owner-trigger;
+    top: anchor(bottom);
+    right: anchor(right);
+    left: auto;
+    margin-top: 10px;
+  }
+}
+/* - Top panel */
+
+
 .scales-block {
   margin-bottom: calc(var(--gap) * 2);
 }
@@ -489,3 +577,4 @@ watch(
   }
 }
 </style>
+

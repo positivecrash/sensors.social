@@ -509,6 +509,7 @@ export default {
   "sensorpopup.edit": "редактировать",
   "No data available": "Нет доступных данных",
   "Only sensor owner can add stories for this sensor.": "Только владелец датчика может добавлять истории для этого датчика.",
+  "To add info and stories": "Чтобы добавить информацию и истории",
   "Share your insights with the community!": "Поделитесь своими инсайтами с сообществом!",
   "Checking login state...": "Проверка состояния входа...",
   "Please login first.": "Пожалуйста, сначала войдите в систему.",
@@ -562,6 +563,8 @@ export default {
   "logs_health_device_hid_warnings": "Этот датчик отображает измерения как некорректные.",
   "logs_health_show_warnings_for_period": "Показать предупреждения для выбранного периода",
   "Don't show any data warnings for this device": "Не показывать предупреждения о данных для этого устройства",
+  "sensor_picker_not_found": "Не найден",
+  "sensor_picker_shop_prefix": "Купить датчики и аксессуары на",
   "Show data warnings again": "Снова показывать предупреждения о данных",
   "Sending…": "Отправка…",
   "Thanks! Your message was sent.": "Спасибо! Ваше сообщение было отправлено."

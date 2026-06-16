@@ -4,6 +4,7 @@ import "leaflet.tilelayer.colorfilter";
 import "leaflet/dist/leaflet.css";
 
 import { settings, themes } from "@config";
+import { isDarkMapThemeEnabled } from "./themeScheme";
 
 let map;
 let usermarker;
@@ -79,19 +80,23 @@ export function init(position, zoom, theme = "light") {
   // Light layer
   layerMapLight = layerFromThemeKey(themeCfg.light, noWrap);
 
-  // Dark layer: prefer explicit dark; otherwise optionally invert light if invertForDark=true
-  if (themeCfg.dark) {
-    layerMapDark = layerFromThemeKey(themeCfg.dark, noWrap);
+  // Dark layer: explicit key, or inverted light when invertForDark=true
+  const darkKey = String(themeCfg.dark ?? "").trim();
+  if (darkKey) {
+    layerMapDark = layerFromThemeKey(darkKey, noWrap);
   } else if (themeCfg.invertForDark) {
     layerMapDark = layerFromThemeKey(themeCfg.light, noWrap, true);
   }
 
-  // Soft fallback to OSM if nothing resolved
+  // Soft fallback to OSM for light only; skip dark fallback when dark theme is disabled
   if (!layerMapLight) layerMapLight = layerFromThemeKey("osm", noWrap);
-  if (!layerMapDark) layerMapDark = layerFromThemeKey("osm", noWrap);
+  if (!layerMapDark && isDarkMapThemeEnabled(themeCfg)) {
+    layerMapDark = layerFromThemeKey("osm", noWrap);
+  }
 
   // Create satellite layer
-  layerMapSatellite = layerFromThemeKey("esri-imagery", noWrap);
+  const satelliteKey = String(themeCfg.satellite ?? "esri-imagery").trim() || "esri-imagery";
+  layerMapSatellite = layerFromThemeKey(satelliteKey, noWrap);
 
   map = L.map("map", {
     maxBounds: mode === "island" ? boundsLimit : WORLD_BOUNDS,
@@ -155,12 +160,18 @@ export function setTheme(theme) {
   if (layerMapDark && map.hasLayer(layerMapDark)) map.removeLayer(layerMapDark);
   if (layerMapSatellite && map.hasLayer(layerMapSatellite)) map.removeLayer(layerMapSatellite);
 
+  const satelliteKey = settings?.MAP?.theme?.satellite;
+
   // Add the selected layer
   if (theme === "light" && layerMapLight) {
     map.addLayer(layerMapLight);
-  } else if (theme === "dark" && layerMapDark) {
-    map.addLayer(layerMapDark);
-  } else if (theme === settings?.MAP?.theme?.satellite && layerMapSatellite) {
+  } else if (theme === "dark") {
+    if (layerMapDark) {
+      map.addLayer(layerMapDark);
+    } else if (layerMapLight) {
+      map.addLayer(layerMapLight);
+    }
+  } else if (theme === satelliteKey && layerMapSatellite) {
     map.addLayer(layerMapSatellite);
   }
 }

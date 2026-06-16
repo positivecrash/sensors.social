@@ -157,6 +157,7 @@ import { settings } from "@config";
 import HistoryImport from "./HistoryImport.vue";
 import ToggleButton from "../controls/ToggleButton.vue";
 import { instanceMap } from "../../utils/map/map";
+import { resolveMapColorScheme } from "../../utils/map/themeScheme";
 import { initWindLayer, switchWindLayer, destroyWindLayer } from "../../utils/map/wind";
 import measurements from "../../measurements";
 // import { getTypeProvider } from "../../utils/utils"; // deprecated
@@ -549,12 +550,8 @@ const toggleMapTheme = () => {
     // Возвращаемся к дефолтной теме (светлой/темной)
     mapTheme.value = "default";
     localStorage.setItem("mapTheme", "default");
-    // Определяем системную тему
-    const isDarkMode = window?.matchMedia("(prefers-color-scheme: dark)").matches;
-    const defaultTheme = isDarkMode ? "dark" : "light";
-    // Обновляем тему через глобальную функцию
     if (window.mapUpdateTheme) {
-      window.mapUpdateTheme(defaultTheme);
+      window.mapUpdateTheme(resolveMapColorScheme());
     }
   }
 };

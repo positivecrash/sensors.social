@@ -19,25 +19,14 @@
 <script setup>
 import { ref, onMounted } from "vue";
 import { settings } from "@config";
+import { fetchLatestGithubRelease } from "@/utils/githubRelease";
 
-// Use the repo name from your config
 const repoName = ref(settings.REPO_NAME);
-
-// Holds the tag name of the latest release
 const latestRelease = ref("loading...");
 
 onMounted(async () => {
   try {
-    // Fetch the latest release info from GitHub API
-    const res = await fetch(`https://api.github.com/repos/${repoName.value}/releases/latest`);
-
-    if (!res.ok) {
-      throw new Error(`HTTP error! status: ${res.status}`);
-    }
-
-    const json = await res.json();
-    // GitHub uses the `tag_name` field for release tags
-    latestRelease.value = json.tag_name;
+    latestRelease.value = await fetchLatestGithubRelease(repoName.value);
   } catch (e) {
     console.error("Error fetching latest release:", e);
     latestRelease.value = "";

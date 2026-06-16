@@ -12,12 +12,54 @@ const LIBP2P_PROVIDER = new Libp2pProvider(settings.LIBP2P);
 // Глобальный объект провайдера
 let providerObj = null;
 
+// In-flight v2 sensor requests (preload + logs share the same payload).
+const sensorV2Inflight = new Map();
+const sensorV2Recent = new Map();
+const SENSOR_V2_RECENT_MS = 60_000;
+
+/**
+ * Day fetch bounds aligned with getSensorDataWithCache: for today end = now, not end-of-day.
+ */
+export function sensorFetchBoundsForDate(isoDate) {
+  const bounds = dayBoundsUnix(isoDate);
+  if (isoDate === dayISO()) {
+    return { start: bounds.start, end: Math.floor(Date.now() / 1000) };
+  }
+  return bounds;
+}
+
+async function fetchSensorV2Payload(sensorId, startTimestamp, endTimestamp, signal = null) {
+  const sid = String(sensorId || "");
+  if (!sid) return null;
+
+  const key = `${sid}:${startTimestamp}:${endTimestamp}`;
+  const recent = sensorV2Recent.get(key);
+  if (recent && Date.now() - recent.ts < SENSOR_V2_RECENT_MS) {
+    return recent.payload;
+  }
+
+  if (sensorV2Inflight.has(key)) {
+    return sensorV2Inflight.get(key);
+  }
+
+  const promise = fetchJson(
+    `${settings.REMOTE_PROVIDER}api/v2/sensor/${sid}/${startTimestamp}/${endTimestamp}`,
+    { cache: "no-store", signal }
+  )
+    .then((payload) => {
+      sensorV2Recent.set(key, { payload, ts: Date.now() });
+      return payload;
+    })
+    .finally(() => {
+      sensorV2Inflight.delete(key);
+    });
+
+  sensorV2Inflight.set(key, promise);
+  return promise;
+}
+
 // Cache latest v2 meta for a sensor to drive UI (owner sensors dropdown, etc.)
 const latestSensorMetaById = new Map();
-
-// In-memory cache for week/month logs (v2 payload can be very large for owners with many sensors).
-// This avoids re-downloading when toggling week <-> month <-> week in the same session.
-const periodLogsCache = new Map();
 
 /** Max distance (km) between points of the same owner to share one map marker. */
 export const OWNER_GEO_CLUSTER_KM = 3;
@@ -72,6 +114,7 @@ export function sensorTypeFromDeviceModel(deviceModel, logSamples = null) {
   const m = String(deviceModel || "").toLowerCase();
   if (m === "insight") return "insight";
   if (m === "urban") return "urban";
+  if (m === "diy") return "diy";
   if (m === "altruist") return "altruist";
   if (Array.isArray(logSamples) && logSamples.length > 0) {
     return classifySensorTypeFromLogSamples(logSamples);
@@ -376,59 +419,6 @@ export async function getSensors(start, end, provider = "remote") {
 }
 
 /**
- * Fetch a single sensor "meta" row (geo/model/owner/timestamp) from the v2 markers period list.
- * Useful when a sensor is bundled away by owner-dedupe, but the UI needs to force-show it.
- */
-export async function getSensorMetaFromPeriod(sensorId, start, end) {
-  if (!sensorId) return null;
-  const target = String(sensorId);
-  try {
-    const historyData = await REMOTE_PROVIDER.getSensorsForPeriod(start, end);
-    if (Array.isArray(historyData)) {
-      const sensorData = historyData.find((s) => String(s?.sensor_id || "") === target);
-      if (sensorData?.sensor_id && sensorData?.geo) {
-        const lat = parseFloat(sensorData.geo.lat);
-        const lng = parseFloat(sensorData.geo.lng);
-        if (hasValidCoordinates({ lat, lng })) {
-          return {
-            sensor_id: String(sensorData.sensor_id),
-            model: sensorData.model || 2,
-            geo: { lat, lng },
-            address: sensorData.address || null,
-            donated_by: sensorData.donated_by || null,
-            owner: normalizeOwnerKey(sensorData) || null,
-            device_model: sensorData.device_model || null,
-            timestamp: sensorData.timestamp || null,
-          };
-        }
-      }
-    }
-
-    const meta = await preloadSensorMeta(target, start, end);
-    if (!meta) return null;
-    const owner = normalizeOwnerKey(meta) || null;
-    const points = meta?.data?.[target];
-    const geo = geoFromLogPoints(points);
-    if (!hasValidCoordinates(geo)) return null;
-
-    const entry = listBundleSensorEntries(meta).find((e) => String(e.sensor_id) === target);
-    return {
-      sensor_id: target,
-      model: 2,
-      geo: { lat: Number(geo.lat), lng: Number(geo.lng) },
-      address: null,
-      donated_by: null,
-      owner,
-      device_model: entry?.device_model || null,
-      timestamp: Number(points?.[points.length - 1]?.timestamp) || null,
-    };
-  } catch (error) {
-    console.warn("Failed to load sensor meta from period:", error);
-    return null;
-  }
-}
-
-/**
  * Фильтрует сенсоры согласно конфигурации excluded_sensors
  * @param {Array} sensors - массив сенсоров для фильтрации
  * @returns {Array} отфильтрованный массив сенсоров
@@ -459,19 +449,21 @@ export async function getSensorOwner(sensorId) {
   if (!sensorId) return null;
 
   try {
-    // Используем короткий промежуток времени - последний час (unix seconds, как в остальных API)
-    const end = Math.floor(Date.now() / 1000);
-    const start = end - 3600;
+    const sid = String(sensorId);
+    const idb = await getCachedSensorIdbMeta(sid);
+    if (idb?.owner) return normalizeOwnerKey({ owner: idb.owner });
 
-    // Делаем прямой запрос, чтобы получить полный объект ответа с sensor.owner
-    const result = await fetchJson(
-      `${settings.REMOTE_PROVIDER}api/v2/sensor/${sensorId}/${start}/${end}`,
-      { cache: "no-store" }
-    );
+    const cached = getCachedSensorMeta(sid);
+    if (cached) {
+      const owner = normalizeOwnerKey(cached);
+      if (owner) return owner;
+    }
 
-    // API возвращает структуру: { result: [], sensor: { owner: "..." } }
-    if (result && result.sensor && result.sensor.owner) {
-      return result.sensor.owner;
+    const { start, end } = sensorFetchBoundsForDate(dayISO());
+    const payload = await fetchSensorV2Payload(sid, start, end);
+    if (payload?.sensor?.owner) {
+      cacheSensorMetaForBundle(sid, payload.sensor);
+      return normalizeOwnerKey(payload.sensor);
     }
 
     return null;
@@ -696,10 +688,7 @@ export function getOwnerSensorsWithData(sensorId, anchorGeoOverride = null, sens
 export async function preloadSensorMeta(sensorId, startTimestamp, endTimestamp, signal = null) {
   if (!sensorId) return null;
   try {
-    const payload = await fetchJson(
-      `${settings.REMOTE_PROVIDER}api/v2/sensor/${sensorId}/${startTimestamp}/${endTimestamp}`,
-      { cache: "no-store", signal }
-    );
+    const payload = await fetchSensorV2Payload(sensorId, startTimestamp, endTimestamp, signal);
     if (payload?.sensor && typeof payload.sensor === "object") {
       cacheSensorMetaForBundle(sensorId, payload.sensor);
       return payload.sensor;
@@ -763,10 +752,11 @@ export async function getSensorData(
         return Array.isArray(historyData) ? historyData : null;
       }
     } else {
-      // v2 endpoint returns `{ result: [...], sensor: { owner, sensors: [...], data: { [id]: [...] } } }`
-      const payload = await fetchJson(
-        `${settings.REMOTE_PROVIDER}api/v2/sensor/${sensorId}/${startTimestamp}/${endTimestamp}`,
-        { cache: "no-store", signal }
+      const payload = await fetchSensorV2Payload(
+        sensorId,
+        startTimestamp,
+        endTimestamp,
+        signal
       );
       if (payload?.sensor && typeof payload.sensor === "object") {
         cacheSensorMetaForBundle(sensorId, payload.sensor);
@@ -864,7 +854,73 @@ export function unsubscribeRealtime(unwatch) {
   }
 }
 
+let sensorCitiesCache = null;
+let sensorCitiesPromise = null;
+
+/**
+ * Cities list for history CSV export. One GET per session.
+ * Provider health check uses HEAD in remote Provider.status().
+ */
+export async function fetchSensorCities() {
+  if (sensorCitiesCache) return sensorCitiesCache;
+  if (sensorCitiesPromise) return sensorCitiesPromise;
+
+  sensorCitiesPromise = fetch(`${settings.REMOTE_PROVIDER}api/sensor/cities`, { cache: "default" })
+    .then(async (res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      const data = json?.result;
+      if (!data || typeof data !== "object") throw new Error("Invalid cities payload");
+      sensorCitiesCache = data;
+      return data;
+    })
+    .finally(() => {
+      sensorCitiesPromise = null;
+    });
+
+  return sensorCitiesPromise;
+}
+
 // ==================== INDEXEDDB CACHE FUNCTIONS ====================
+
+const SENSOR_IDB_TTL = 24 * 60 * 60 * 1000; // 24 часа
+
+function readSensorIdbEntry(sensorId) {
+  const sensorKey = String(sensorId || "");
+  if (!sensorKey) return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    IDBworkflow("Sensors", "sensorData", "readonly", (store) => {
+      const request = store.get(sensorKey);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    });
+  });
+}
+
+function isFreshSensorIdbEntry(entry) {
+  if (!entry?.lastUpdated) return false;
+  return Date.now() - Number(entry.lastUpdated) < SENSOR_IDB_TTL;
+}
+
+/**
+ * Cached sensor meta from IndexedDB (owner, type, address).
+ * Avoids repeat API calls when logs were loaded in this session or recently.
+ */
+export async function getCachedSensorIdbMeta(sensorId) {
+  try {
+    const entry = await readSensorIdbEntry(sensorId);
+    if (!isFreshSensorIdbEntry(entry)) return null;
+    return {
+      owner: entry.owner ?? null,
+      type: entry.type ?? null,
+      address: entry.address ?? null,
+    };
+  } catch (error) {
+    console.error("Error getting cached sensor IDB meta:", error);
+    return null;
+  }
+}
 
 /**
  * Получает данные из кэша для указанных дней
@@ -874,44 +930,25 @@ export function unsubscribeRealtime(unwatch) {
  */
 async function getCachedData(sensorId, dates) {
   try {
-    const now = Date.now();
-    const TTL = 24 * 60 * 60 * 1000; // 24 часа
-    const cachedData = { data: {}, address: null, lastUpdated: 0 };
+    const cachedData = { data: {}, address: null, owner: null, type: null, lastUpdated: 0 };
+    const sensorData = await readSensorIdbEntry(sensorId);
 
-    // Получаем данные сенсора из кэша
-    const sensorKey = sensorId;
+    if (sensorData && isFreshSensorIdbEntry(sensorData)) {
+      for (const date of dates) {
+        if (sensorData.data && sensorData.data[date]) {
+          cachedData.data[date] = sensorData.data[date];
+        }
+      }
+      cachedData.address = sensorData.address || null;
+      cachedData.owner = sensorData.owner ?? null;
+      cachedData.type = sensorData.type ?? null;
+      cachedData.lastUpdated = Number(sensorData.lastUpdated || 0);
+    }
 
-    return new Promise((resolve) => {
-      IDBworkflow("Sensors", "sensorData", "readonly", (store) => {
-        const request = store.get(sensorKey);
-
-        request.onsuccess = () => {
-          const sensorData = request.result;
-
-          if (sensorData && now - sensorData.lastUpdated < TTL) {
-            // Фильтруем нужные даты из кэшированных данных
-            for (const date of dates) {
-              if (sensorData.data && sensorData.data[date]) {
-                cachedData.data[date] = sensorData.data[date];
-              }
-            }
-
-            // Сохраняем адрес из кэша
-            cachedData.address = sensorData.address || null;
-            cachedData.lastUpdated = Number(sensorData.lastUpdated || 0);
-          }
-
-          resolve(cachedData);
-        };
-
-        request.onerror = () => {
-          resolve(cachedData);
-        };
-      });
-    });
+    return cachedData;
   } catch (error) {
     console.error("Error getting cached data:", error);
-    return { data: {}, address: null, lastUpdated: 0 };
+    return { data: {}, address: null, owner: null, type: null, lastUpdated: 0 };
   }
 }
 
@@ -921,10 +958,11 @@ async function getCachedData(sensorId, dates) {
  * @param {Object} dataByDate - объект с данными по дням
  * @param {string|null} address - адрес сенсора (опционально)
  */
-async function saveToCache(sensorId, dataByDate, address = null) {
+async function saveToCache(sensorId, dataByDate, meta = {}) {
   try {
     const sensorKey = sensorId;
     const now = Date.now();
+    const { address = null, owner = null, type = null } = meta;
 
     // Получаем существующие данные сенсора
     const existingData = await new Promise((resolve) => {
@@ -948,13 +986,17 @@ async function saveToCache(sensorId, dataByDate, address = null) {
     };
 
     // Сохраняем адрес (новый или существующий)
-    const finalAddress = address || existingData.address;
+    const finalAddress = address || existingData.address || null;
+    const finalOwner = owner ?? existingData.owner ?? null;
+    const finalType = type ?? existingData.type ?? null;
 
     // Создаем или обновляем запись сенсора
     const cacheEntry = {
       id: sensorKey,
       data: updatedData,
       address: finalAddress,
+      owner: finalOwner,
+      type: finalType,
       lastUpdated: now,
       ttl: 24 * 60 * 60 * 1000, // 24 часа
     };
@@ -1031,26 +1073,8 @@ export async function clearAllCache() {
  */
 export async function getCachedAddress(sensorId) {
   try {
-    const sensorKey = sensorId;
-
-    return new Promise((resolve) => {
-      IDBworkflow("Sensors", "sensorData", "readonly", (store) => {
-        const request = store.get(sensorKey);
-
-        request.onsuccess = () => {
-          const sensorData = request.result;
-          if (sensorData && sensorData.address) {
-            resolve(sensorData.address);
-          } else {
-            resolve(null);
-          }
-        };
-
-        request.onerror = () => {
-          resolve(null);
-        };
-      });
-    });
+    const meta = await getCachedSensorIdbMeta(sensorId);
+    return meta?.address || null;
   } catch (error) {
     console.error("Error getting cached address:", error);
     return null;
@@ -1086,6 +1110,8 @@ export async function saveAddressToCache(sensorId, address) {
       id: sensorKey,
       data: existingData.data || {},
       address: address,
+      owner: existingData.owner ?? null,
+      type: existingData.type ?? null,
       lastUpdated: Date.now(),
       ttl: 24 * 60 * 60 * 1000, // 24 часа
     };
@@ -1180,7 +1206,8 @@ export async function getSensorDataWithCache(
   provider = "remote",
   onRealtimePoint = null,
   signal = null,
-  progressCallback = null
+  progressCallback = null,
+  cacheMeta = null
 ) {
   // Для realtime провайдера используем обычную логику
   if (provider === "realtime") {
@@ -1274,9 +1301,7 @@ export async function getSensorDataWithCache(
     if (missingDays.length > 0) {
       let loadedDays = cachedDays;
       for (const day of missingDays) {
-        const { start: dayStart, end: defaultDayEnd } = dayBoundsUnix(day);
-        // Для текущего дня используем текущее время как end, для прошедших дней - конец дня
-        const dayEnd = day === today ? Math.floor(Date.now() / 1000) : defaultDayEnd;
+        const { start: dayStart, end: dayEnd } = sensorFetchBoundsForDate(day);
 
         const dayData = await getSensorData(sensorId, dayStart, dayEnd, provider, null, signal);
         // Сохраняем только если это массив (успешно загружено, даже пустое)
@@ -1295,7 +1320,11 @@ export async function getSensorDataWithCache(
       }
       // Сохраняем только успешно загруженные данные (массивы)
       if (Object.keys(newData).length > 0) {
-        await saveToCache(sensorId, newData, cachedAddress);
+        await saveToCache(sensorId, newData, {
+          address: cachedAddress,
+          owner: cacheMeta?.owner ?? null,
+          type: cacheMeta?.type ?? null,
+        });
       }
     }
 
@@ -1338,8 +1367,10 @@ export async function getSensorDataWithCache(
       return null;
     }
 
-    // Добавляем адрес к результату для использования в компонентах
+    // Добавляем метаданные из кэша для использования в компонентах
     result._cachedAddress = cachedAddress;
+    result._cachedOwner = cachedResult.owner ?? null;
+    result._cachedType = cachedResult.type ?? null;
     emitProgress({ status: "done", loadedDays: totalDays, missingDays: 0, totalDays, cachedDays });
 
     return result.sort((a, b) => a.timestamp - b.timestamp);

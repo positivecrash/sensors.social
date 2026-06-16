@@ -18,6 +18,11 @@ import { settings } from "@config";
 import { toRaw } from "vue";
 import Footer from "../components/footer/Footer.vue";
 import { drawuser, init, removeMap, setTheme, moveMap, initMapContext } from "../utils/map/map";
+import {
+  getMapThemeConfig,
+  resolveInitialMapTheme,
+  resolveMapColorScheme,
+} from "../utils/map/themeScheme";
 import { init as initSensors } from "../utils/map/sensors";
 import { init as initMessages } from "../utils/map/messages";
 import { destroyWindLayer } from "../utils/map/wind";
@@ -67,39 +72,22 @@ const geomsgopenedtime = ref(5000); // 5 seconds
 const geomsgopenedtimer = ref(null);
 const map = ref(null);
 
-// Определяем тему с учетом сохраненного выбора пользователя
-const getInitialTheme = () => {
-  const savedMapTheme = localStorage.getItem("mapTheme");
-  if (savedMapTheme === "satellite" && settings?.MAP?.theme?.satellite) {
-    return settings.MAP.theme.satellite;
-  }
-  return window?.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-};
-
-const currentTheme = ref(getInitialTheme());
+const currentTheme = ref(resolveInitialMapTheme());
 
 // Computed properties
 const theme = computed(() => currentTheme.value);
 
 // Functions
-const themelistener = ({ matches, media }) => {
-  if (!matches) {
-    // Not matching anymore = not interesting
-    return;
-  }
+const themelistener = ({ matches }) => {
+  if (!matches) return;
 
-  // Не меняем тему если пользователь выбрал спутник
   const savedMapTheme = localStorage.getItem("mapTheme");
-  if (savedMapTheme === "satellite" && settings?.MAP?.theme?.satellite) {
+  const themeCfg = getMapThemeConfig();
+  if (savedMapTheme === "satellite" && themeCfg.satellite) {
     return;
   }
 
-  if (media === "(prefers-color-scheme: dark)") {
-    currentTheme.value = "dark";
-  } else if (media === "(prefers-color-scheme: light)") {
-    currentTheme.value = "light";
-  }
-
+  currentTheme.value = resolveMapColorScheme(themeCfg);
   setTheme(theme.value);
 };
 

@@ -6,7 +6,8 @@
     <font-awesome-icon icon="fa-solid fa-user" />
   </router-link>
   <template v-else>
-    <div id="accounts" class="popover popover-top-right accounts-popover" popover>
+    <div class="login-popover-slot">
+      <div id="accounts" class="popover popover-top-right accounts-popover" popover>
       <div class="accounts-title">{{ $t("Accounts") }}</div>
 
       <div v-for="acc in accounts" :key="acc.address" class="account-card">
@@ -76,10 +77,11 @@
           {{ $t("Log out all") }}
         </button>
       </div>
+      </div>
+      <button class="popovercontrol button-round-outline" popovertarget="accounts">
+        <font-awesome-icon icon="fa-solid fa-user" />
+      </button>
     </div>
-    <button class="popovercontrol button-round-outline" popovertarget="accounts">
-      <font-awesome-icon icon="fa-solid fa-user" />
-    </button>
   </template>
 </template>
 
@@ -192,6 +194,16 @@ watch(
 </script>
 
 <style scoped>
+.login-popover-slot {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.login-popover-slot > .popover {
+  position: fixed;
+  margin: 0;
+}
+
 .accounts-popover {
   min-width: 320px;
   max-width: min(420px, 95vw);

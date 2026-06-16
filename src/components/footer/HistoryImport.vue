@@ -35,6 +35,7 @@
 <script>
 import { settings } from "@config";
 import { dayISO, addMonthsISO, dayBoundsUnix } from "@/utils/date";
+import { fetchSensorCities } from "@/utils/map/sensors/requests";
 
 export default {
   data() {
@@ -86,10 +87,7 @@ export default {
   },
   async created() {
     try {
-      const res = await fetch(`${settings.REMOTE_PROVIDER}api/sensor/cities`);
-      if (!res.ok) throw new Error("Network response was not ok");
-      const result = await res.json();
-      this.cities = result.result;
+      this.cities = await fetchSensorCities();
       const country = Object.keys(this.cities);
       const state = Object.keys(this.cities[country[0]]);
       this.city = this.cities[country[0]][state[0]][0];

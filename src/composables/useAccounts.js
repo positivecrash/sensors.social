@@ -8,19 +8,74 @@ import {
   encryptText,
   decryptText,
 } from "../utils/idb";
-import { idbschemas } from "@config";
+import { idbschemas, settings } from "@config";
+import { fetchJson } from "@/utils/utils";
 
 const schema = idbschemas?.Altruist || {};
 const DB_NAME = schema.dbname;
 const STORE = Object.keys(schema.stores || { Accounts: {} })[0] || "Accounts";
 const SESSION_ACCOUNTS_KEY = "altruist_session_accounts";
 
-// Small in-memory cache for getUserSensors to prevent request storms.
-// - USER_SENSORS_TTL_MS: how long a successful result is considered fresh.
-// - userSensorsCache: stores either the last resolved data with timestamp,
-//   or a pending promise to deduplicate parallel calls for the same owner.
-const USER_SENSORS_TTL_MS = 5 * 60 * 1000; // 5 minutes
+// In-memory cache for getUserSensors to prevent request storms.
+const USER_SENSORS_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const userSensorsCache = new Map(); // owner -> { ts, data } | { promise }
+
+/** Sync read of a fresh in-memory getUserSensors result (null if missing or stale). */
+export function peekUserSensorsCache(owner) {
+  const key = String(owner || "").trim();
+  if (!key) return null;
+  const cached = userSensorsCache.get(key);
+  if (cached?.data && Date.now() - cached.ts < USER_SENSORS_TTL_MS) {
+    return cached.data;
+  }
+  return null;
+}
+
+async function fetchOwnerSensorsNetwork(owner) {
+  const key = String(owner || "").trim();
+  if (!key) return [];
+
+  const base = String(settings.REMOTE_PROVIDER || "").replace(/\/$/, "");
+  const result = await fetchJson(
+    `${base}/api/sensor/sensors/${encodeURIComponent(key)}`,
+    { cache: "default" }
+  );
+  const data = Array.isArray(result?.sensors) ? result.sensors.map((id) => String(id)) : [];
+  userSensorsCache.set(key, { ts: Date.now(), data });
+  return data;
+}
+
+/** Owner device ids: RAM cache (15 min) with in-flight dedup, then network. */
+export async function getUserSensorsList(owner, { forceNetwork = false } = {}) {
+  const key = String(owner || "").trim();
+  if (!key) return [];
+
+  if (!forceNetwork) {
+    const mem = peekUserSensorsCache(key);
+    if (mem) return mem;
+  }
+
+  const cached = userSensorsCache.get(key);
+  if (cached?.promise) {
+    return cached.promise;
+  }
+
+  const promise = fetchOwnerSensorsNetwork(key)
+    .catch((error) => {
+      console.warn("getUserSensorsList error:", error);
+      userSensorsCache.delete(key);
+      return [];
+    })
+    .finally(() => {
+      const current = userSensorsCache.get(key);
+      if (current?.promise === promise) {
+        userSensorsCache.delete(key);
+      }
+    });
+
+  userSensorsCache.set(key, { promise });
+  return promise;
+}
 
 // Глобальное состояние аккаунтов (разделяется между всеми экземплярами composable)
 const accounts = ref([]); // [{ phrase, address, type, devices, ts }]
@@ -91,7 +146,6 @@ async function normalizeAccountsFromStorage(list) {
 
 export function useAccounts() {
   const addAccount = async ({ phrase, address, type, devices, ts }, { persist = true } = {}) => {
-    // console.log('addAccount', phrase, address, type, devices, ts, persist)
     const idx = accounts.value.findIndex((a) => a.address === address);
     const item = { phrase, address, type, devices, ts: ts || Date.now(), persist };
     if (idx !== -1) accounts.value[idx] = item;
@@ -140,7 +194,6 @@ export function useAccounts() {
       persist: false,
     }));
 
-    // Best-effort migration: if legacy plaintext phrases are present in sessionStorage, re-save encrypted.
     const sessionHasLegacyPlain = sessionRaw.some(
       (acc) => typeof acc?.phrase === "string" && String(acc.phrase).trim().length > 0
     );
@@ -168,7 +221,6 @@ export function useAccounts() {
       persist: acc?.persist === false ? false : true,
     }));
 
-    // Best-effort migration: if legacy plaintext phrases are present in IndexedDB, re-save encrypted.
     const legacyPlain = persistentRaw.filter(
       (acc) => typeof acc?.phrase === "string" && String(acc.phrase).trim().length > 0
     );
@@ -189,58 +241,10 @@ export function useAccounts() {
     return accounts.value;
   };
 
-  /**
-   * Fetches the list of sensors for a given owner with basic request coalescing and TTL cache.
-   *
-   * Behavior:
-   * - Returns cached data if it's younger than USER_SENSORS_TTL_MS.
-   * - If there is an in-flight request for the same owner, returns that promise instead of firing a new one.
-   * - On success, caches the result with a timestamp; on failure, clears pending state and returns an empty array.
-   *
-   * Rationale:
-   * - This method can be called by multiple UI parts at startup (App.vue, Login.vue, etc.).
-   * - Without coalescing, it may create many identical XHRs and cause UI hitches.
-   */
-  const getUserSensors = async (owner) => {
-    const key = String(owner || "").trim();
-    if (!key) return [];
-
-    const now = Date.now();
-    const cached = userSensorsCache.get(key);
-
-    // Serve fresh cache
-    if (cached && cached.data && now - cached.ts < USER_SENSORS_TTL_MS) {
-      return cached.data;
-    }
-    // Share in-flight request
-    if (cached && cached.promise) {
-      return cached.promise;
-    }
-
-    const promise = (async () => {
-      try {
-        const response = await fetch(`https://roseman.airalab.org/api/sensor/sensors/${key}`);
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const result = await response.json();
-        const data = Array.isArray(result.sensors) ? result.sensors : [];
-        userSensorsCache.set(key, { ts: Date.now(), data });
-        return data;
-      } catch (error) {
-        console.warn("getUserSensors error:", error);
-        userSensorsCache.delete(key);
-        return [];
-      }
-    })();
-
-    userSensorsCache.set(key, { promise });
-    return promise;
-  };
+  const getUserSensors = (owner, options) => getUserSensorsList(owner, options);
 
   return {
-    // State
     accounts,
-
-    // Actions
     addAccount,
     removeAccounts,
     getAccounts,

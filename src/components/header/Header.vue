@@ -36,7 +36,7 @@
         </div>
       </div>
 
-      <div class="flexline">
+      <div class="flexline header-actions">
         <a
           href="https://x.com/sensorssocial"
           target="_blank"
@@ -47,120 +47,117 @@
           <span>{{ $t("Latest updates") }}</span>
         </a>
 
-        <div id="about" class="popover popover-top-right" popover>
-          <h3>{{ $t("header.title") }}</h3>
-          <p>
-            {{ $t("header.text1") }}
-            <a
-              href="https://www.fsf.org/campaigns/priority-projects/decentralization-federation"
-              target="_blank"
-              rel="noopener"
-              >{{ $t("header.link1") }}</a
-            >
-            {{ $t("header.text2") }}
-            <a
-              href="https://robonomics.academy/en/learn/sensors-connectivity-course/sensors-connectivity-module/"
-              target="_blank"
-              rel="noopener"
-              >{{ $t("header.link2") }}</a
-            >
-            {{ $t("header.text3") }}
-          </p>
-          <p>
-            {{ $t("Map data") }} ©
-            <a href="https://www.openstreetmap.org/copyright" target="_blank">{{
-              $t("OpenStreetMap contributors")
-            }}</a>
-          </p>
-
-          <section class="navlinks">
-            <router-link class="navtile" to="/altruist-device-info/">
-              <font-awesome-icon class="navfa" icon="fa-solid fa-circle-info" />
-              <span>{{ $t("Altruist device info") }}</span>
-            </router-link>
-            <router-link class="navtile" to="/where-to-buy/">
-              <font-awesome-icon class="navfa" icon="fa-regular fa-credit-card" />
-              <span>{{ $t("Where to buy") }}</span>
-            </router-link>
-            <router-link class="navtile" to="/altruist-use-cases/">
-              <img class="navimg" :src="urbanIcon" alt="" aria-hidden="true" />
-              <span>{{ $t("Altruist use cases") }}</span>
-            </router-link>
-            <router-link class="navtile" to="/altruist-timeline/">
-              <font-awesome-icon class="navfa" icon="fa-solid fa-infinity" />
-              <span>{{ $t("Altruist timeline") }}</span>
-            </router-link>
-            <router-link class="navtile" to="/altruist-compare/">
-              <img class="navimg" :src="altruistIcon" alt="" aria-hidden="true" />
-              <span>{{ $t("Altruist comparison table") }}</span>
-            </router-link>
-            <router-link class="navtile" to="/altruist-setup/">
-              <img class="navimg" :src="diyIcon" alt="" aria-hidden="true" />
-              <span>{{ $t("Altruist setup") }}</span>
-            </router-link>
-            <router-link class="navtile" to="/air-measurements/">
-              <font-awesome-icon class="navfa" icon="fa-solid fa-chart-simple" />
-              <span>{{ $t("links.measurement") }}</span>
-            </router-link>
-            <router-link class="navtile" to="/construction-monitoring/">
-              <font-awesome-icon class="navfa" icon="fa-solid fa-helmet-safety" />
-              <span>{{ $t("Construction monitoring") }}</span>
-            </router-link>
-            <router-link class="navtile" to="/blog/">
-              <font-awesome-icon class="navfa" icon="fa-regular fa-newspaper" />
-              <span>{{ $t("Blog") }}</span>
-            </router-link>
-            <router-link class="navtile" to="/noise-data-real-estate/">
-              <font-awesome-icon class="navfa" icon="fa-solid fa-volume-high" />
-              <span>{{ $t("Noise data for real estate") }}</span>
-            </router-link>
-            <router-link class="navtile" to="/privacy-policy/">
-              <font-awesome-icon class="navfa" icon="fa-regular fa-file-lines" />
-              <span>{{ $t("links.privacy") }}</span>
-            </router-link>
-            <router-link class="navtile" to="/support/">
-              <font-awesome-icon class="navfa" icon="fa-regular fa-comment" />
-              <span>{{ $t("Support") }}</span>
-            </router-link>
-          </section>
-
-          <ReleaseInfo />
-
-          <div class="locale-select-container">
-            <select v-model="locale">
-              <option v-for="lang in locales" :key="lang.code" :value="lang.code">
-                {{ lang.title }}
-              </option>
-            </select>
-          </div>
-        </div>
-
         <button class="popovercontrol button-round-outline" popovertarget="about">
           <font-awesome-icon icon="fa-solid fa-bars" />
         </button>
 
-        <!-- Закладки -->
-        <div id="bookmarks" class="popover-top-right popover" popover>
-          <h3>{{ $t("bookmarks.listtitle") }}</h3>
-          <div class="bookmarks-content">
-            <Bookmarks />
-          </div>
-        </div>
         <button
           class="popovercontrol button-round-outline bookmarksbutton"
           :class="{ active: bookmarksCount > 0 }"
           popovertarget="bookmarks"
         >
           <font-awesome-icon icon="fa-solid fa-bookmark" />
-          <!-- <font-awesome-icon
-            :icon="bookmarksCount > 0 ? 'fa-solid fa-bookmark' : 'fa-regular fa-bookmark'"
-          /> -->
           <span class="button-round-outline__badge" v-if="bookmarksCount > 0">{{
             bookmarksCount
           }}</span>
         </button>
 
         <Login v-if="settings.SERVICES.accounts" />
+      </div>
+    </div>
+
+    <div id="about" class="popover popover-top-right" popover>
+        <h3>{{ $t("header.title") }}</h3>
+        <p>
+          {{ $t("header.text1") }}
+          <a
+            href="https://www.fsf.org/campaigns/priority-projects/decentralization-federation"
+            target="_blank"
+            rel="noopener"
+            >{{ $t("header.link1") }}</a
+          >
+          {{ $t("header.text2") }}
+          <a
+            href="https://robonomics.academy/en/learn/sensors-connectivity-course/sensors-connectivity-module/"
+            target="_blank"
+            rel="noopener"
+            >{{ $t("header.link2") }}</a
+          >
+          {{ $t("header.text3") }}
+        </p>
+        <p>
+          {{ $t("Map data") }} ©
+          <a href="https://www.openstreetmap.org/copyright" target="_blank">{{
+            $t("OpenStreetMap contributors")
+          }}</a>
+        </p>
+
+        <section class="navlinks">
+          <router-link class="navtile" to="/altruist-device-info/">
+            <font-awesome-icon class="navfa" icon="fa-solid fa-circle-info" />
+            <span>{{ $t("Altruist device info") }}</span>
+          </router-link>
+          <router-link class="navtile" to="/where-to-buy/">
+            <font-awesome-icon class="navfa" icon="fa-regular fa-credit-card" />
+            <span>{{ $t("Where to buy") }}</span>
+          </router-link>
+          <router-link class="navtile" to="/altruist-use-cases/">
+            <img class="navimg" :src="urbanIcon" alt="" aria-hidden="true" />
+            <span>{{ $t("Altruist use cases") }}</span>
+          </router-link>
+          <router-link class="navtile" to="/altruist-timeline/">
+            <font-awesome-icon class="navfa" icon="fa-solid fa-infinity" />
+            <span>{{ $t("Altruist timeline") }}</span>
+          </router-link>
+          <router-link class="navtile" to="/altruist-compare/">
+            <img class="navimg" :src="altruistIcon" alt="" aria-hidden="true" />
+            <span>{{ $t("Altruist comparison table") }}</span>
+          </router-link>
+          <router-link class="navtile" to="/altruist-setup/">
+            <img class="navimg" :src="diyIcon" alt="" aria-hidden="true" />
+            <span>{{ $t("Altruist setup") }}</span>
+          </router-link>
+          <router-link class="navtile" to="/air-measurements/">
+            <font-awesome-icon class="navfa" icon="fa-solid fa-chart-simple" />
+            <span>{{ $t("links.measurement") }}</span>
+          </router-link>
+          <router-link class="navtile" to="/construction-monitoring/">
+            <font-awesome-icon class="navfa" icon="fa-solid fa-helmet-safety" />
+            <span>{{ $t("Construction monitoring") }}</span>
+          </router-link>
+          <router-link class="navtile" to="/blog/">
+            <font-awesome-icon class="navfa" icon="fa-regular fa-newspaper" />
+            <span>{{ $t("Blog") }}</span>
+          </router-link>
+          <router-link class="navtile" to="/noise-data-real-estate/">
+            <font-awesome-icon class="navfa" icon="fa-solid fa-volume-high" />
+            <span>{{ $t("Noise data for real estate") }}</span>
+          </router-link>
+          <router-link class="navtile" to="/privacy-policy/">
+            <font-awesome-icon class="navfa" icon="fa-regular fa-file-lines" />
+            <span>{{ $t("links.privacy") }}</span>
+          </router-link>
+          <router-link class="navtile" to="/support/">
+            <font-awesome-icon class="navfa" icon="fa-regular fa-comment" />
+            <span>{{ $t("Support") }}</span>
+          </router-link>
+        </section>
+
+        <ReleaseInfo />
+
+        <div class="locale-select-container">
+          <select v-model="locale">
+            <option v-for="lang in locales" :key="lang.code" :value="lang.code">
+              {{ lang.title }}
+            </option>
+          </select>
+        </div>
+      </div>
+
+    <div id="bookmarks" class="popover-top-right popover" popover>
+      <h3>{{ $t("bookmarks.listtitle") }}</h3>
+      <div class="bookmarks-content">
+        <Bookmarks />
       </div>
     </div>
   </header>
@@ -291,7 +288,7 @@ header {
   left: 0;
   position: sticky;
   top: 0;
-  width: 99vw;
+  width: 100%;
   z-index: 99;
   pointer-events: none;
   box-shadow: 0 6px 12px -4px rgba(0, 0, 0, 0.12);
@@ -303,6 +300,12 @@ header.route-altruist-compare {
 
 header > * {
   pointer-events: all;
+}
+
+/* Popovers live outside the flex row; closed state must not affect header layout */
+header > .popover {
+  position: fixed;
+  margin: 0;
 }
 
 .header-content {
@@ -514,8 +517,8 @@ header > * {
 /* - bookmarks button */
 
 @media screen and (width < 600px) {
-  .flexline {
-    gap: calc(var(--gap) * 2);
+  .header-actions {
+    gap: var(--gap);
   }
 
   .hidemobiles {
@@ -536,5 +539,22 @@ header > * {
 .locale-select-container {
   text-align: center;
   margin-top: var(--gap);
+}
+</style>
+
+<style>
+/* По умолчанию popover backdrop не ч/б (см. base.css).
+   Для header popover оставляем grayscale, как было раньше. */
+#about:popover-open::backdrop,
+#bookmarks:popover-open::backdrop,
+#accounts:popover-open::backdrop {
+  backdrop-filter: grayscale(1);
+}
+
+/* Polyfill fallback: в CSS используется класс `.\:popover-open`. */
+#about.\:popover-open::backdrop,
+#bookmarks.\:popover-open::backdrop,
+#accounts.\:popover-open::backdrop {
+  backdrop-filter: grayscale(1);
 }
 </style>

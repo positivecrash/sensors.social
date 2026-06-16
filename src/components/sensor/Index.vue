@@ -4,6 +4,7 @@
     <div class="sensor-header">
       <div v-if="!isBookmarked && !showBookmarkForm" class="title title-bookmark-no">
         <button
+          v-if="hasAddress"
           type="button"
           class="button"
           :aria-label="t('sensorpopup.bookmarkbutton')"
@@ -13,9 +14,9 @@
           <font-awesome-icon icon="fa-solid fa-bookmark" />
         </button>
 
-        <h3>
-          <template v-if="point?.address">{{ point.address }}</template>
-          <span v-else class="skeleton skeleton-text"></span>
+        <h3 class="sensor-header__address">
+          <template v-if="hasAddress">{{ point.address }}</template>
+          <span v-else class="sensor-header__address-skeleton" aria-hidden="true"></span>
         </h3>
       </div>
 
@@ -58,9 +59,9 @@
           </div>
         </form>
 
-        <div class="text-small">
-          <template v-if="point?.address">{{ point.address }}</template>
-          <span v-else class="skeleton skeleton-text"></span>
+        <div class="text-small sensor-header__address">
+          <template v-if="hasAddress">{{ point.address }}</template>
+          <span v-else class="sensor-header__address-skeleton sensor-header__address-skeleton--sub" aria-hidden="true"></span>
         </div>
       </div>
 
@@ -77,9 +78,9 @@
           </button>
         </h3>
 
-        <div class="text-small">
-          <template v-if="point?.address">{{ point.address }}</template>
-          <span v-else class="skeleton skeleton-text"></span>
+        <div class="text-small sensor-header__address">
+          <template v-if="hasAddress">{{ point.address }}</template>
+          <span v-else class="sensor-header__address-skeleton sensor-header__address-skeleton--sub" aria-hidden="true"></span>
         </div>
       </div>
 
@@ -194,7 +195,7 @@
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMap } from "@/composables/useMap";
-import { useSensors } from "@/composables/useSensors";
+import { useSensors, isSensorAddressReady } from "@/composables/useSensors";
 import { getStoriesForSensor, isStoryHidden, storiesLocalKeys } from "@/composables/useStories";
 import { useSensorBookmark } from "@/composables/useBookmarks";
 import { settings } from "@config";
@@ -218,6 +219,7 @@ const localeComputed = computed(() => localStorage.getItem("locale") || locale.v
 const sensorsUI = useSensors(localeComputed);
 
 const point = computed(() => props.point?.value ?? props.point ?? null);
+const hasAddress = computed(() => isSensorAddressReady(point.value));
 
 // Активная вкладка
 const activeTab = ref("chart");
@@ -502,6 +504,28 @@ watch(
   gap: var(--gap);
   align-items: center;
   justify-content: center;
+}
+
+.sensor-header__address {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.sensor-header__address-skeleton {
+  display: block;
+  width: min(100%, 18rem);
+  height: 1.35em;
+  margin: 0 auto;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, #f0f0f0, #e0e0e0, #f0f0f0);
+  background-size: 200% 100%;
+  animation: panel-skeleton-loading 1.5s infinite;
+}
+
+.sensor-header__address-skeleton--sub {
+  width: min(100%, 14rem);
+  height: 1em;
 }
 
 .sensor-header .title-bookmark-add {

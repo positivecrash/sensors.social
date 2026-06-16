@@ -4,6 +4,12 @@
     "position": {
       "lat": "39.0277",
       "lng": "8.7891"
+    },
+    "theme": {
+      "dark": ""
     }
+  },
+  "SERVICES": {
+    "messages": false
   }
 }

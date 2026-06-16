@@ -35,6 +35,7 @@ import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 
 import { useMap } from "@/composables/useMap";
+import { useAccounts } from "@/composables/useAccounts";
 
 import Header from "../components/header/Header.vue";
 import Stories from "../components/header/Stories.vue";
@@ -58,6 +59,7 @@ import { useMessages } from "../composables/useMessages";
 import { dayISO, getPeriodBounds } from "@/utils/date";
 
 const mapState = useMap();
+const accountStore = useAccounts();
 const router = useRouter();
 const route = useRoute();
 const { locale } = useI18n();
@@ -85,7 +87,7 @@ const {
   updateSensorMaxData,
   updateSensorMarkers,
   refreshOpenSensorMapMarker,
-  hydrateOwnerBundleForRealtime,
+  hydrateOwnerBundleFromUserSensors,
   loadSensors,
   commitPopupShell,
 } = sensorsUI;
@@ -348,17 +350,6 @@ watch(
       }
     }
 
-    // Сбрасываем timeline режим при смене сенсора (если был week или month)
-    // Но не сбрасываем для realtime провайдера
-    if (
-      sensorChanged &&
-      mapState.currentProvider.value !== "realtime" &&
-      mapState.timelineMode.value &&
-      (mapState.timelineMode.value === "week" || mapState.timelineMode.value === "month")
-    ) {
-      mapState.setTimelineMode("day");
-    }
-
     // Обновляем maxdata и маркеры при изменении type (без date и provider, так как они обрабатываются через loadSensors)
     if (typeChanged) {
       if (mapState.currentProvider.value === "remote") {
@@ -394,20 +385,22 @@ watch(
       }
 
       loadSensors().then(async () => {
-        const pickDefaultOwnerSensorId = (owner, lat, lng) => {
+        const pickDefaultOwnerSensorId = async (owner, lat, lng) => {
           const o = String(owner || "").trim();
           if (!o) return null;
 
+          const ids = (await accountStore.getUserSensors(o)).map((id) => String(id));
+          if (!ids.length) return null;
+
           const list = sensorsList();
-          const ownerSensors = list.filter((s) => String(s?.owner || "") === o);
-          if (ownerSensors.length === 0) return null;
+          const ownerSensors = list.filter((s) => ids.includes(String(s?.sensor_id || "")));
 
           const latN = Number(lat);
           const lngN = Number(lng);
           const hasAnchor = Number.isFinite(latN) && Number.isFinite(lngN);
           if (!hasAnchor) {
             const rep = pickOwnerClusterRepresentative(ownerSensors) || ownerSensors[0];
-            return rep?.sensor_id || null;
+            return rep?.sensor_id || ids[0] || null;
           }
 
           const anchor = { lat: latN, lng: lngN };
@@ -416,7 +409,7 @@ watch(
           );
           const pool = nearby.length > 0 ? nearby : ownerSensors;
           const rep = pickOwnerClusterRepresentative(pool) || pool[0];
-          return rep?.sensor_id || null;
+          return rep?.sensor_id || ids[0] || null;
         };
 
         if (mapState.currentProvider.value === "remote") {
@@ -425,7 +418,7 @@ watch(
           updateSensorMarkers(true);
           const hydrateId = route.query.sensor || sensorPoint.value?.sensor_id || null;
           if (hydrateId) {
-            void hydrateOwnerBundleForRealtime(hydrateId).then(() => {
+            void hydrateOwnerBundleFromUserSensors(hydrateId).then(() => {
               refreshOpenSensorMapMarker?.();
             });
           }
@@ -434,7 +427,7 @@ watch(
         // После загрузки сенсоров обновляем попап: deep link `sensor=` или открытый попап (owner без sensor в URL)
         const ownerDefaultId =
           !route.query.sensor && route.query.owner
-            ? pickDefaultOwnerSensorId(route.query.owner, route.query.lat, route.query.lng)
+            ? await pickDefaultOwnerSensorId(route.query.owner, route.query.lat, route.query.lng)
             : null;
 
         const liveSensorId =
@@ -498,7 +491,10 @@ watch(
       const k = `${owner}-${newQuery.date || ""}-${newQuery.type || ""}-${newQuery.provider || ""}`;
       if (realtimeOwnerDeepLinkHandled.value.key === k) return;
 
-      const ownerSensors = sensorsList().filter((s) => String(s?.owner || "").trim() === owner);
+      const ids = (await accountStore.getUserSensors(owner)).map((id) => String(id));
+      if (!ids.length) return;
+
+      const ownerSensors = sensorsList().filter((s) => ids.includes(String(s?.sensor_id || "")));
       const anchor = { lat: latN, lng: lngN };
 
       const nearby = ownerSensors.filter(
@@ -506,19 +502,28 @@ watch(
       );
       const pool = nearby.length > 0 ? nearby : ownerSensors.filter((s) => hasValidCoordinates(s?.geo));
       const best = pickOwnerClusterRepresentative(pool) || pool[0];
-      if (!best?.sensor_id) return;
+      const fallbackId = ids[0] || null;
+      const sensorId = best?.sensor_id || fallbackId;
+      if (!sensorId) return;
 
       realtimeOwnerDeepLinkHandled.value = { key: k };
       mapState.setMapSettings(route, router, {
-        sensor: best.sensor_id,
+        sensor: sensorId,
         // keep owner in URL
         owner,
-        lat: best.geo?.lat ?? latN,
-        lng: best.geo?.lng ?? lngN,
+        lat: best?.geo?.lat ?? latN,
+        lng: best?.geo?.lng ?? lngN,
         zoom: newQuery.zoom ?? 18,
       });
 
-      updateSensorPopup(best, { fromMapClick: true });
+      updateSensorPopup(
+        best || {
+          sensor_id: sensorId,
+          geo: { lat: latN, lng: lngN },
+          owner,
+        },
+        { fromMapClick: true }
+      );
     }
 
     // Обновляем попап сообщения при изменении message или при первом заходе с сообщением
