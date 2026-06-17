@@ -14,7 +14,7 @@ export const ICON_CONFIG = {
     ...DEFAULT_COLORS.cluster,
   },
   point: {
-    iconSize: new L.Point(30, 30),
+    iconSize: new L.Point(40, 40),
     className: "sensor-point",
     ...DEFAULT_COLORS.point,
   },
@@ -51,8 +51,10 @@ export function createIconHTML({ text, image, color, container = {} }) {
   // Добавляем CSS переменную для цвета
   const colorStyle = color ? `--color: ${color};` : "";
   const finalStyle = `${colorStyle}${wrapperStyle}`;
+  const typeClass =
+    image && color ? "sensor-icon--with-type" : image ? "sensor-icon--image-only" : "";
 
-  return `<div class="sensor-icon ${wrapperClass}" style="${finalStyle}" ${attrsString}>${content}</div>`;
+  return `<div class="sensor-icon ${typeClass} ${wrapperClass}" style="${finalStyle}" ${attrsString}>${content}</div>`;
 }
 
 /**
@@ -141,10 +143,9 @@ export function createIconPoint({ colors, isBookmarked, id, image }) {
   const htmlParams = {};
 
   if (image) {
-    // Image marker
     htmlParams.image = image;
-  } else if (colors) {
-    // Default marker
+  }
+  if (colors) {
     htmlParams.color = colors.basic;
   }
 

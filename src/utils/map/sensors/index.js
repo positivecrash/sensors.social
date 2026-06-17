@@ -58,7 +58,7 @@ function upsertMarker(point, colors, sensor_id = null) {
       existingMarker.setIcon(
         icons.createIconPoint({
           image: point.iconLocal,
-          colors: colors,
+          colors: point.markerIconFullBleed ? null : colors,
           isBookmarked: point.isBookmarked,
           id: point.sensor_id,
         })
@@ -100,8 +100,8 @@ function upsertMarker(point, colors, sensor_id = null) {
   const marker = icons.createMarker(
     coord,
     point,
-    colors,
-    point.iconLocal, // image (null для circle маркеров)
+    point.markerIconFullBleed ? null : colors,
+    point.iconLocal,
     markerType
   );
 

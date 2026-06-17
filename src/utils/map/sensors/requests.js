@@ -400,6 +400,10 @@ export async function getSensors(start, end, provider = "remote") {
         owner: String(sensorData.owner || "").trim() || null,
         device_model: sensorData.device_model || null,
         timestamp: sensorData.timestamp || null,
+        sensors:
+          Array.isArray(sensorData.sensors) && sensorData.sensors.length > 0
+            ? sensorData.sensors
+            : null,
       };
 
       if (!hasValidCoordinates({ lat, lng })) {

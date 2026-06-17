@@ -3,7 +3,7 @@
 }
 
 .sensor-point {
-    --size: 30px;
+    --size: 40px;
 }
 
 .sensor-icon {
@@ -46,16 +46,39 @@
   height: 100%;
 }
 
+/* Device type icon inside measurement-colored marker */
+.sensor-point .sensor-icon--with-type .sensor-icon-image {
+  width: 74%;
+  height: 74%;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-light) 88%, transparent);
+}
+
+.sensor-point .sensor-icon--with-type .sensor-icon-image img {
+  object-fit: contain;
+  padding: 1px;
+}
+
+/* Pinned / custom full-bleed image markers (no measurement fill) */
+.sensor-point .sensor-icon--image-only {
+  background-color: transparent;
+  border-color: transparent;
+}
+
+.sensor-point .sensor-icon--image-only .sensor-icon-image img {
+  object-fit: cover;
+}
+
 /* Hover эффекты для унифицированных иконок */
 .is-hovered .sensor-icon {
-  transform: scale(1.22);
-  box-shadow: 0 0 5px 3px rgba(211, 211, 211, 0.55);
-  filter: saturate(1.1);
+  transform: scale(1.38);
+  box-shadow: 0 0 8px 4px rgba(211, 211, 211, 0.6);
+  filter: saturate(1.12);
 }
 
 /* Touch tap flash (brief visual feedback on tap) */
 .tap-highlight .sensor-icon {
-  transform: scale(1.18);
+  transform: scale(1.32);
   box-shadow: 0 0 0 3px rgba(57, 57, 57, 0.45);
 }
 

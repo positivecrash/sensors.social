@@ -23,6 +23,7 @@ import {
   getOwnerSensorsWithData,
   listBundleSensorIds,
   listBundleSensorEntries,
+  parseBundleSensorEntry,
   preloadSensorMeta,
   pickOwnerClusterRepresentative,
   countMapMarkersFromList,
@@ -39,6 +40,7 @@ import { dayISO, dayBoundsUnix, getPeriodBounds } from "@/utils/date";
 import { loadLogsHealth } from "../utils/calculations/sensor/logs_health.js";
 
 import diyPrototypeIcon from "@/assets/images/altruist-device/altruist-diy-prototype.webp";
+import dualDefaultIcon from "@/assets/images/altruist-device/altruist-dual-default-icon.webp";
 import insightDefaultIcon from "@/assets/images/altruist-device/altruist-insight-default-icon.webp";
 import urbanDefaultIcon from "@/assets/images/altruist-device/altruist-urban-default-icon.webp";
 
@@ -219,6 +221,7 @@ export function sensorTypeTitle(type) {
 export function sensorTypeIcon(type) {
   if (type === "diy") return diyPrototypeIcon;
   if (type === "insight") return insightDefaultIcon;
+  if (type === "dual") return dualDefaultIcon;
   return urbanDefaultIcon;
 }
 
@@ -234,6 +237,74 @@ function findBundleEntryForSlot(bundle, slotType) {
   return list.find((o) => pickerSlotType(o, slotType) && o?.id) || null;
 }
 
+/** Owner bundle has both Urban and Insight devices with known sensor ids. */
+function ownerBundleHasDualFromBundle(bundle) {
+  if (!Array.isArray(bundle) || bundle.length === 0) return false;
+  return (
+    Boolean(findBundleEntryForSlot(bundle, "urban")?.id) &&
+    Boolean(findBundleEntryForSlot(bundle, "insight")?.id)
+  );
+}
+
+/** Bundle slots from markers API `sensors` siblings (no extra network). */
+function bundleFromMarkerSensors(point, sensorsList = null) {
+  const sid = String(point?.sensor_id || "");
+  const raw = Array.isArray(point?.sensors) ? point.sensors : [];
+  if (!sid && raw.length === 0) return null;
+
+  const ids = new Set();
+  if (sid) ids.add(sid);
+  for (const entry of raw) {
+    const parsed = parseBundleSensorEntry(entry);
+    if (parsed?.sensor_id) ids.add(String(parsed.sensor_id));
+  }
+  if (ids.size < 2) return null;
+
+  const typed = inferTypesForOwnerIds([...ids], sensorsList, point);
+  return typed.map(({ id, type }) => ({ id, type }));
+}
+
+export function ownerBundleHasDualDevices(point, sensorsList = null) {
+  if (!point || !hasSensorOwner(point)) return false;
+
+  const fromMarkers = bundleFromMarkerSensors(point, sensorsList);
+  if (ownerBundleHasDualFromBundle(fromMarkers)) return true;
+
+  if (ownerBundleHasDualFromBundle(point.ownerSensorsWithData)) return true;
+
+  const sid = point?.sensor_id ? String(point.sensor_id) : "";
+  const meta = sid ? getCachedSensorMeta(sid) : null;
+  if (meta) {
+    const fromMeta = listBundleSensorEntries(meta).map((entry) => ({
+      id: entry.sensor_id,
+      type: deviceModelToSensorType(entry.device_model),
+    }));
+    if (ownerBundleHasDualFromBundle(fromMeta)) return true;
+  }
+
+  const ownerKey = normalizeOwnerKey(point);
+  if (!ownerKey) return false;
+
+  const ids = resolveOwnerSensorIds(point, ownerKey, point?.ownerSensorIds);
+  if (!Array.isArray(ids) || ids.length < 2) return false;
+
+  const typed = inferTypesForOwnerIds(ids, sensorsList, point);
+  return ownerBundleHasDualFromBundle(typed.map(({ id, type }) => ({ id, type })));
+}
+
+/** Map marker image: config pin override, else dual / urban / insight / diy by sensor type. */
+export function mapMarkerIcon(point, sensorsList = null) {
+  const sid = point?.sensor_id;
+  const pinned = sid ? pinned_sensors[sid]?.icon : null;
+  if (pinned) {
+    return { image: pinned, fullBleed: true };
+  }
+  if (ownerBundleHasDualDevices(point, sensorsList)) {
+    return { image: sensorTypeIcon("dual"), fullBleed: false };
+  }
+  return { image: sensorTypeIcon(resolveSensorType(point)), fullBleed: false };
+}
+
 function inferTypesForOwnerIds(ids, sensorsList, activePoint) {
   const currentId = String(activePoint?.sensor_id || "");
   const entries = ids.map((id) => {
@@ -246,8 +317,13 @@ function inferTypesForOwnerIds(ids, sensorsList, activePoint) {
       if (!meta) return null;
       return listBundleSensorEntries(meta).find((e) => String(e.sensor_id) === sid) || null;
     })();
+    const markerSibling = (() => {
+      const raw = Array.isArray(activePoint?.sensors) ? activePoint.sensors : [];
+      return raw.map(parseBundleSensorEntry).find((e) => e && String(e.sensor_id) === sid) || null;
+    })();
     let type =
       deviceModelToSensorType(fromMap?.device_model) ||
+      deviceModelToSensorType(markerSibling?.device_model) ||
       deviceModelToSensorType(metaEntry?.device_model) ||
       classifySensorTypeFromLiveData(fromMap?.data) ||
       (sid === currentId
@@ -478,24 +554,18 @@ function buildPubsubOwnerList(point, sensorsList, anchorGeo) {
   const nearby = ownerSensors.filter(
     (s) => hasValidCoordinates(s?.geo) && haversineKm(geo, s.geo) <= OWNER_GEO_CLUSTER_KM
   );
-  const arr = nearby.map((s) => ({
-    id: s.sensor_id,
-    hasData: true,
-    type: deviceModelToSensorType(s.device_model),
-    geo: s.geo,
-  }));
-  if (sid && !arr.some((o) => String(o.id) === sid)) {
+  if (nearby.length === 0) return null;
+
+  const ids = nearby.map((s) => String(s.sensor_id));
+  if (sid && !ids.includes(sid)) {
     const self = ownerSensors.find((s) => String(s?.sensor_id || "") === sid);
     if (self && hasValidCoordinates(self?.geo)) {
-      arr.unshift({
-        id: sid,
-        hasData: true,
-        type: deviceModelToSensorType(self?.device_model),
-        geo: self.geo,
-      });
+      ids.unshift(sid);
     }
   }
-  return arr.length > 0 ? arr : null;
+
+  const typed = inferTypesForOwnerIds(ids, sensorsList, point);
+  return buildOwnerBundleFromIds(ids, sensorsList, geo, sid, point, typed);
 }
 
 function ownerIdsFromV2Meta(sensorId) {
@@ -1829,6 +1899,27 @@ export function useSensors(localeComputed) {
   const formatPointForSensor = (basePoint, options = {}) => {
     const { calculateValue = false } = options;
 
+    const ownerKey = normalizeOwnerKey(basePoint);
+    const ownerSensorsWithData = (() => {
+      if (Array.isArray(basePoint.ownerSensorsWithData) && basePoint.ownerSensorsWithData.length > 0) {
+        return (
+          applyFilteredOwnerBundleOptions(basePoint, basePoint.ownerSensorsWithData, sensors.value) ??
+          basePoint.ownerSensorsWithData
+        );
+      }
+      if (!hasSensorOwner(basePoint)) return null;
+      return applyFilteredOwnerBundleOptions(basePoint, null, sensors.value);
+    })();
+
+    const ownerSensorIds =
+      basePoint.ownerSensorIds ??
+      (ownerKey ? peekUserSensorsCache(ownerKey) : null);
+
+    const markerIcon = mapMarkerIcon(
+      { ...basePoint, ownerSensorsWithData, ownerSensorIds },
+      sensors.value
+    );
+
     const point = {
       sensor_id: basePoint.sensor_id,
       geo: basePoint.geo,
@@ -1838,16 +1929,18 @@ export function useSensors(localeComputed) {
       data: basePoint.data || {},
       address: basePoint.address || null,
       owner: basePoint.owner || null,
+      sensors: Array.isArray(basePoint.sensors) ? basePoint.sensors : null,
       idbSensorType: basePoint.idbSensorType ?? null,
       timestamp: basePoint.timestamp ?? null,
-      ownerSensorsWithData: basePoint.ownerSensorsWithData ?? null,
-      ownerSensorIds: basePoint.ownerSensorIds ?? null,
+      ownerSensorsWithData,
+      ownerSensorIds,
       isBookmarked: isPointBookmarked(basePoint),
       logs: Array.isArray(basePoint.logs)
         ? sanitizeSensorLogsPmSentinels(basePoint.logs)
         : basePoint.logs ?? null,
       _ownerResolved: basePoint._ownerResolved ?? false,
-      iconLocal: pinned_sensors[basePoint.sensor_id]?.icon || null,
+      iconLocal: markerIcon.image,
+      markerIconFullBleed: markerIcon.fullBleed,
     };
 
     // Вычисляем значение и isEmpty только если нужно
@@ -2152,7 +2245,15 @@ export function useSensors(localeComputed) {
       hasValidCoordinates(anchorGeo) && !hasValidCoordinates(rep.geo)
         ? { ...rep, geo: anchorGeo }
         : rep;
-    const repPoint = formatPointForSensor(repForMap, { calculateValue: true });
+    const repPoint = formatPointForSensor(
+      {
+        ...repForMap,
+        owner: repForMap.owner || ownerKey,
+        ownerSensorIds: point.ownerSensorIds || repForMap.ownerSensorIds || null,
+        ownerSensorsWithData: bundleOpts?.length ? bundleOpts : point.ownerSensorsWithData,
+      },
+      { calculateValue: true }
+    );
     if (!repPoint.model) return;
 
     const idsToClear = markerIdsInAnchorCluster(
@@ -2323,7 +2424,31 @@ export function useSensors(localeComputed) {
       const rep = pickOwnerClusterRepresentative(members);
       if (!rep?.sensor_id) return;
       const repId = String(rep.sensor_id);
-      const repPoint = formatPointForSensor(rep, { calculateValue: true });
+      const clusterAnchor =
+        (anchorGeo && hasValidCoordinates(anchorGeo) ? anchorGeo : null) ||
+        resolveBundleAnchorGeo(rep, list);
+      const ownerKey = normalizeOwnerKey(rep);
+      const cachedIds = ownerKey ? peekUserSensorsCache(ownerKey) : null;
+      const memberIds = [
+        ...new Set([
+          ...members.map((s) => String(s.sensor_id)),
+          ...(Array.isArray(cachedIds) ? cachedIds.map((id) => String(id)) : []),
+        ]),
+      ];
+      const typed = inferTypesForOwnerIds(memberIds, list, rep);
+      const clusterBundle = finalizeOwnerBundleNearAnchor(
+        buildOwnerBundleFromIds(memberIds, list, clusterAnchor, repId, rep, typed),
+        clusterAnchor,
+        repId
+      );
+      const repPoint = formatPointForSensor(
+        {
+          ...rep,
+          ownerSensorIds: cachedIds || rep.ownerSensorIds || null,
+          ownerSensorsWithData: clusterBundle?.length ? clusterBundle : null,
+        },
+        { calculateValue: true }
+      );
       if (!repPoint.model) return;
 
       if (!shouldFilterSensor(repId)) {
