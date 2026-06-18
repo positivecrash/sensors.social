@@ -1,5 +1,9 @@
 <template>
-  <select v-model="dataMode" class="provider-select">
+  <select
+    v-model="dataMode"
+    class="provider-select"
+    aria-label="Data mode"
+  >
     <option v-for="[key, label] in options" :key="key" :value="key">
       {{ $t(label) }}
     </option>
@@ -48,3 +52,11 @@ watch(
   }
 );
 </script>
+
+<style scoped>
+.provider-select {
+  flex-shrink: 0;
+  min-width: 9.5rem;
+  max-width: 12rem;
+}
+</style>

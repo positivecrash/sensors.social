@@ -34,7 +34,7 @@
       </button>
     </div>
 
-    <div class="flexline footercontrol-wide">
+    <div class="flexline footercontrol-wide mapcontrols-primary">
       <ProviderType />
 
       <!-- выбор даты -->
@@ -160,8 +160,12 @@ import { instanceMap } from "../../utils/map/map";
 import { resolveMapColorScheme } from "../../utils/map/themeScheme";
 import { initWindLayer, switchWindLayer, destroyWindLayer } from "../../utils/map/wind";
 import measurements from "../../measurements";
+import { sortMapLayerUnits } from "../../measurements/tools";
 // import { getTypeProvider } from "../../utils/utils"; // deprecated
-import { Remote } from "../../providers";
+import {
+  listMeasurementsOnMap,
+  collectUnitsFromMapSensors,
+} from "../../utils/map/sensors/requests";
 import ProviderType from "../ProviderType.vue";
 // import { setMapSettings, getPriorityValue } from "../../utils/utils"; // Перенесено в useMap
 
@@ -269,31 +273,40 @@ const availableOptions = computed(() => {
     })
     .filter((item) => Boolean(item));
 
-  // Add AQI option only if:
-  // 1. We have PM2.5 and PM10 data
-  // 2. We're in history mode (not realtime)
-  // 3. localStorage is available
-  if (
-    availableUnits.value.includes("pm25") &&
-    availableUnits.value.includes("pm10") &&
-    !realtime.value &&
-    isLocalStorageAvailable()
-  ) {
-    // Ensure AQI appears first in the list
-    const aqiOption = {
-      value: "aqi",
-      name: measurements.aqi?.nameshort?.[locale.value] + " (Beta)" || "AQI",
-    };
-    // Avoid duplicates if any
-    const filtered = opts.filter((o) => o.value !== "aqi");
-    opts = [aqiOption, ...filtered];
-  }
-
-  // Remove "Noise" from available options
-  opts = opts.filter((opt) => opt.value !== "noise");
+  // Remove legacy / map-unavailable options
+  opts = opts.filter((opt) => opt.value !== "noise" && opt.value !== "aqi");
 
   return opts;
 });
+
+const pickFallbackUnit = (units) => {
+  if (units.includes("pm10")) return "pm10";
+  if (units.includes("pm25")) return "pm25";
+  return units[0] || "pm10";
+};
+
+const ensureValidUnitSelection = (units) => {
+  const current = type.value;
+  if (current === "aqi" || !units.includes(current)) {
+    type.value = pickFallbackUnit(units);
+  }
+};
+
+/** Remote: maxdata on map. Realtime: live sensors on map. */
+const loadAvailableUnits = async () => {
+  try {
+    let units;
+    if (realtime.value) {
+      units = collectUnitsFromMapSensors(sensorsUI.sensors);
+    } else {
+      units = await listMeasurementsOnMap(start.value, Number(endTimestamp.value));
+    }
+    availableUnits.value = sortMapLayerUnits(units.length > 0 ? units : ["pm10"]);
+    ensureValidUnitSelection(availableUnits.value);
+  } catch (e) {
+    console.error("Failed to load available measurements:", e);
+  }
+};
 
 // вычисления для истории
 const startTimestamp = computed(() => String(dayBoundsUnix(start.value).start));
@@ -309,6 +322,10 @@ watch(start, async (newDate) => {
 
   // Устанавливаем новую дату и синхронизируем
   mapState.setMapSettings(route, router, { date: parsedDate });
+
+  if (!realtime.value) {
+    void loadAvailableUnits();
+  }
 
   // Если слой сообщений включен, обновляем данные
   if (messages.value) {
@@ -382,15 +399,19 @@ watch(
 
 // watch(messages, (v) => switchMessagesLayer(instanceMap(), v));
 
-// Watch for realtime mode changes
 watch(
   () => mapState.currentProvider.value,
-  (newProvider, oldProvider) => {
-    // If switching to realtime mode and current type is AQI, switch to PM2.5
-    if (newProvider === "realtime" && type.value === "aqi") {
-      type.value = "pm25";
-    }
+  () => {
+    void loadAvailableUnits();
   }
+);
+
+watch(
+  () => sensorsUI.sensors,
+  () => {
+    if (realtime.value) void loadAvailableUnits();
+  },
+  { deep: true }
 );
 
 // загрузка списка измерений из API
@@ -403,19 +424,8 @@ onMounted(async () => {
       if (stored === null) localStorage.setItem("wind", "true");
     }
 
-    const arr = await Remote.getMeasurements(startTimestamp.value, endTimestamp.value);
-    const toMove = ["pm10", "pm25"];
-    const head = arr.filter((v) => toMove.includes(v));
-    const tail = arr.filter((v) => !toMove.includes(v));
-    availableUnits.value = [...head, ...tail];
-
-    // Respect external unit (composable) as the single source of truth
-    const preferred = mapState.currentUnit.value;
-    if (preferred === "aqi" && !isLocalStorageAvailable()) {
-      type.value = "pm25";
-    } else {
-      type.value = preferred;
-    }
+    await loadAvailableUnits();
+    ensureValidUnitSelection(availableUnits.value);
 
     // На старте компонента поднимаем ветер, если пользователь его не отключал
     // и текущий режим разрешает показывать (realtime или "сегодня").
@@ -618,6 +628,10 @@ defineExpose({
 
 .mapcontrols > * {
   pointer-events: all;
+}
+
+.mapcontrols-primary {
+  flex-shrink: 0;
 }
 
 .popover-bottom-right,

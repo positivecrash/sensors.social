@@ -3,6 +3,7 @@ import Libp2pProvider from "@/providers/libp2p";
 import { getConfigBounds, filterByBounds } from "../map";
 import { hasValidCoordinates, fetchJson } from "../../utils";
 import { dayISO, dayBoundsUnix } from "../../date";
+import { mapLayerUnitIds, sortMapLayerUnits } from "../../../measurements/tools";
 import { settings, excluded_sensors } from "@config";
 
 // Глобальные константы провайдеров
@@ -468,6 +469,11 @@ function applyMaxValuesToSensors(sensors, unit, maxValues) {
   });
 }
 
+function isPastDayCompleteInIdb(record, dayBounds) {
+  if (!record?.values) return false;
+  return Number(record.start) <= dayBounds.start && Number(record.end) >= dayBounds.end;
+}
+
 async function readMapMarkersDataFromIdb(unit, isoDate) {
   try {
     return await IDBgetByKey(SENSORS_IDB_DB, MAP_MARKERS_DATA_STORE, mapMarkersDataId(unit, isoDate));
@@ -485,9 +491,175 @@ async function writeMapMarkersDataToIdb(record) {
   }
 }
 
-function isPastDayCompleteInIdb(record, dayBounds) {
-  if (!record?.values) return false;
-  return Number(record.start) <= dayBounds.start && Number(record.end) >= dayBounds.end;
+/**
+ * Single maxdata entry: memory → IDB → network.
+ * Any network response is always persisted to mapMarkersData IDB + memory cache.
+ */
+export async function ensureMaxDataRecord(unit, isoDate = dayISO(), requestedEnd = null) {
+  const u = String(unit || "").toLowerCase();
+  if (!u) {
+    return { values: {}, start: 0, end: 0, source: "empty" };
+  }
+
+  const dayBounds = dayBoundsUnix(isoDate);
+  const dayStart = dayBounds.start;
+  const isToday = isoDate === dayISO();
+  const end =
+    requestedEnd != null
+      ? Number(requestedEnd)
+      : isToday
+        ? Math.floor(Date.now() / 1000)
+        : dayBounds.end;
+
+  const mem = maxDataApiCache.get(u);
+  if (isMaxDataMemoryValid(mem, isoDate, dayStart)) {
+    if (!isToday || Number(mem.end) >= end) {
+      return { values: mem.values, start: mem.start, end: mem.end, source: "memory" };
+    }
+  }
+
+  const idbRecord = await readMapMarkersDataFromIdb(u, isoDate);
+
+  let fetchStart = dayStart;
+  let fetchEnd = end;
+  let needFetch = false;
+
+  if (!idbRecord?.values) {
+    needFetch = true;
+  } else if (!isToday) {
+    if (isPastDayCompleteInIdb(idbRecord, dayBounds)) {
+      rememberMaxDataInMemory(u, isoDate, idbRecord.start, idbRecord.end, idbRecord.values);
+      return {
+        values: idbRecord.values,
+        start: idbRecord.start,
+        end: idbRecord.end,
+        source: "idb",
+      };
+    }
+    needFetch = true;
+    fetchEnd = dayBounds.end;
+  } else if (!mem) {
+    rememberMaxDataInMemory(u, isoDate, idbRecord.start, idbRecord.end, idbRecord.values);
+    return {
+      values: idbRecord.values,
+      start: idbRecord.start,
+      end: idbRecord.end,
+      source: "idb",
+    };
+  } else if (Number(idbRecord.end) >= end) {
+    rememberMaxDataInMemory(u, isoDate, idbRecord.start, idbRecord.end, idbRecord.values);
+    return {
+      values: idbRecord.values,
+      start: idbRecord.start,
+      end: idbRecord.end,
+      source: "idb",
+    };
+  } else {
+    needFetch = true;
+    fetchStart = Number(idbRecord.start) || dayStart;
+    fetchEnd = end;
+  }
+
+  if (!needFetch) {
+    return {
+      values: mem?.values || idbRecord?.values || {},
+      start: mem?.start ?? idbRecord?.start ?? dayStart,
+      end: mem?.end ?? idbRecord?.end ?? end,
+      source: "memory",
+    };
+  }
+
+  const values = (await REMOTE_PROVIDER.maxValuesForPeriod(fetchStart, fetchEnd, u)) || {};
+  const record = {
+    id: mapMarkersDataId(u, isoDate),
+    unit: u,
+    isoDate,
+    start: fetchStart,
+    end: fetchEnd,
+    values,
+    lastUpdated: Date.now(),
+  };
+
+  await writeMapMarkersDataToIdb(record);
+  rememberMaxDataInMemory(u, isoDate, fetchStart, fetchEnd, values);
+
+  return { values, start: fetchStart, end: fetchEnd, source: "network" };
+}
+
+/** At least one maxdata row is placed on the map (not 0,0). */
+export function maxdataHasMapGeo(values) {
+  if (!values || typeof values !== "object") return false;
+  for (const entry of Object.values(values)) {
+    if (entry?.geo && hasValidCoordinates(entry.geo)) return true;
+  }
+  return false;
+}
+
+/** @deprecated use sortMapLayerUnits from measurements/tools */
+export const sortMeasurementUnits = sortMapLayerUnits;
+
+/** Collect measurement keys from sensors that are drawable on the map (realtime). */
+export function collectUnitsFromMapSensors(sensors) {
+  const units = new Set();
+  for (const sensor of Array.isArray(sensors) ? sensors : []) {
+    if (!hasValidCoordinates(sensor?.geo)) continue;
+    for (const bag of [sensor?.data, sensor?.maxdata]) {
+      if (!bag || typeof bag !== "object") continue;
+      for (const [key, raw] of Object.entries(bag)) {
+        const unit = String(key).toLowerCase();
+        if (!unit || raw === null || raw === undefined) continue;
+        units.add(unit);
+      }
+    }
+  }
+  return sortMapLayerUnits([...units]);
+}
+
+/**
+ * Units with maxdata at a real geo for the day (IDB/memory/network via ensureMaxDataRecord).
+ */
+export async function listMeasurementsOnMap(isoDate = dayISO(), requestedEnd = null) {
+  const dateKey = isoDate || dayISO();
+  const dayBounds = dayBoundsUnix(dateKey);
+  const isToday = dateKey === dayISO();
+  const end =
+    requestedEnd != null
+      ? Number(requestedEnd)
+      : isToday
+        ? Math.floor(Date.now() / 1000)
+        : dayBounds.end;
+
+  const results = await Promise.all(
+    mapLayerUnitIds().map(async (unit) => {
+      const { values } = await ensureMaxDataRecord(unit, dateKey, end);
+      return maxdataHasMapGeo(values) ? unit : null;
+    })
+  );
+
+  return sortMapLayerUnits(results.filter(Boolean));
+}
+
+/** @deprecated use listMeasurementsOnMap */
+export async function filterMeasurementsOnMap(units, start, end, isoDate = dayISO()) {
+  const list =
+    Array.isArray(units) && units.length > 0
+      ? units.map((u) => String(u).toLowerCase())
+      : mapLayerUnitIds();
+  const dateKey = isoDate || dayISO();
+  const dayBounds = dayBoundsUnix(dateKey);
+  const isToday = dateKey === dayISO();
+  const requestedEnd = isToday
+    ? Math.max(Number(end) || 0, Math.floor(Date.now() / 1000))
+    : dayBounds.end;
+
+  const results = await Promise.all(
+    list.map(async (unit) => {
+      const { values } = await ensureMaxDataRecord(unit, dateKey, requestedEnd);
+      return maxdataHasMapGeo(values) ? unit : null;
+    })
+  );
+
+  return sortMapLayerUnits(results.filter(Boolean));
 }
 
 /**
@@ -509,66 +681,9 @@ export async function getMaxData(start, end, unit, sensors, isoDate = dayISO()) 
     return [...sensors];
   }
 
-  const dayBounds = dayBoundsUnix(isoDate);
-  const dayStart = dayBounds.start;
   const isToday = isoDate === dayISO();
-  const requestedEnd = isToday ? Math.floor(Number(end) || Date.now() / 1000) : dayBounds.end;
-
-  const mem = maxDataApiCache.get(unit);
-  if (isMaxDataMemoryValid(mem, isoDate, dayStart)) {
-    if (!isToday || Number(mem.end) >= requestedEnd) {
-      return applyMaxValuesToSensors(sensors, unit, mem.values);
-    }
-  }
-
-  const idbKey = mapMarkersDataId(unit, isoDate);
-  const idbRecord = await readMapMarkersDataFromIdb(unit, isoDate);
-
-  let fetchStart = dayStart;
-  let fetchEnd = requestedEnd;
-  let needFetch = false;
-
-  if (!idbRecord?.values) {
-    needFetch = true;
-  } else if (!isToday) {
-    if (isPastDayCompleteInIdb(idbRecord, dayBounds)) {
-      rememberMaxDataInMemory(unit, isoDate, idbRecord.start, idbRecord.end, idbRecord.values);
-      return applyMaxValuesToSensors(sensors, unit, idbRecord.values);
-    }
-    needFetch = true;
-    fetchEnd = dayBounds.end;
-  } else if (!mem) {
-    // Page reload / first call this session — serve IDB even if end is slightly behind now.
-    rememberMaxDataInMemory(unit, isoDate, idbRecord.start, idbRecord.end, idbRecord.values);
-    return applyMaxValuesToSensors(sensors, unit, idbRecord.values);
-  } else if (Number(idbRecord.end) >= requestedEnd) {
-    rememberMaxDataInMemory(unit, isoDate, idbRecord.start, idbRecord.end, idbRecord.values);
-    return applyMaxValuesToSensors(sensors, unit, idbRecord.values);
-  } else {
-    needFetch = true;
-    fetchStart = Number(idbRecord.start) || dayStart;
-    fetchEnd = requestedEnd;
-  }
-
-  if (!needFetch) {
-    return [...sensors];
-  }
-
-  const maxValues = await REMOTE_PROVIDER.maxValuesForPeriod(fetchStart, fetchEnd, unit);
-  const values = maxValues || {};
-
-  const record = {
-    id: idbKey,
-    unit: String(unit).toLowerCase(),
-    isoDate,
-    start: fetchStart,
-    end: fetchEnd,
-    values,
-    lastUpdated: Date.now(),
-  };
-
-  await writeMapMarkersDataToIdb(record);
-  rememberMaxDataInMemory(unit, isoDate, fetchStart, fetchEnd, values);
+  const requestedEnd = isToday ? Math.floor(Number(end) || Date.now() / 1000) : dayBoundsUnix(isoDate).end;
+  const { values } = await ensureMaxDataRecord(unit, isoDate, requestedEnd);
 
   return applyMaxValuesToSensors(sensors, unit, values);
 }

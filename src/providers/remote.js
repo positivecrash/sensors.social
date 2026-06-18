@@ -104,18 +104,6 @@ class Provider {
     }
   }
 
-  static async getMeasurements(start, end) {
-    try {
-      const result = await fetchJson(
-        `${settings.REMOTE_PROVIDER}api/sensor/measurements/${start}/${end}`,
-        { cache: "no-store" }
-      );
-      return result?.result || [];
-    } catch {
-      return [];
-    }
-  }
-
   watch(cb) {
     // Remote provider doesn't use real-time updates via socket
     // Data is fetched via HTTP requests instead
