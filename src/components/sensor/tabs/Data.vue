@@ -79,9 +79,9 @@
 
       <div v-if="chartHasData" class="chart-area">
         <ChartHealthWarning
-          :visible="showLogsHealthWarningBadge"
-          :popover-id="chartHealthWarningPopoverId"
-          :groups="unhealthyGroupsListDisplay"
+          :log="log"
+          :sensor-id="point?.sensor_id"
+          :legend-key="chartActiveLegendKey"
         />
         <Chart :log="log" @active-legend-change="chartActiveLegendKey = $event" />
       </div>
@@ -200,37 +200,7 @@ watch(
   { immediate: true }
 );
 
-const chartLogsHealthUi = computed(() => (runLogsHealth.value ? logsHealth.value : null));
-
-/** Chart legend key → logsHealth aggregate key */
-const CHART_LEGEND_TO_HEALTH = {
-  dust: "pm",
-  climate: "climate",
-  noise: "noise",
-};
-
-const CHART_HEALTH_LABELS = {
-  pm: "Dust & Particles",
-  climate: "Climate",
-  noise: "Noise",
-};
-
 const chartActiveLegendKey = ref(null);
-
-const chartHealthWarningPopoverId = computed(
-  () => `chart-health-warning-${String(props.point?.sensor_id || "sensor")}`
-);
-
-/** Unhealthy category for the active chart tab only (not all groups in the period). */
-const activeUnhealthyGroupLabels = computed(() => {
-  const lh = chartLogsHealthUi.value;
-  const healthCat = CHART_LEGEND_TO_HEALTH[chartActiveLegendKey.value];
-  if (!lh || !healthCat || lh[healthCat]?.healthy !== false) return [];
-  const labelKey = CHART_HEALTH_LABELS[healthCat];
-  return labelKey ? [t(labelKey)] : [];
-});
-
-const unhealthyGroupsListDisplay = computed(() => activeUnhealthyGroupLabels.value.join(", "));
 
 const logsHealthSensorUserHide = computed(() =>
   Boolean(
@@ -262,15 +232,6 @@ watch(
   (hasData) => {
     if (!hasData) chartActiveLegendKey.value = null;
   }
-);
-
-const showLogsHealthWarningBadge = computed(
-  () =>
-    runLogsHealth.value &&
-    hasLogs.value &&
-    chartHasData.value &&
-    activeUnhealthyGroupLabels.value.length > 0 &&
-    !logsHealthSensorUserHide.value
 );
 
 /** Только глобальный userhide по сенсору (record.userhide). Ссылка по-прежнему снимает все userhide (дни + корень). */

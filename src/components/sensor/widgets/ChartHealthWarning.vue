@@ -13,7 +13,7 @@
     <div :id="popoverId" class="popover chart-health-warning-popover" popover>
       <div class="chart-health-warning-popover__text">
         <p>
-          <b>{{ groups }}</b>{{ t("logs_health_unhealthy_period_rest") }}
+          <b>{{ metricsLabel }}</b>{{ t("logs_health_unhealthy_period_rest") }}
         </p>
         <p class="chart-health-warning-popover__support">
           {{ t("logs_health_unhealthy_support_lead") }}
@@ -27,15 +27,19 @@
 </template>
 
 <script setup>
+import { toRefs } from "vue";
 import { useI18n } from "vue-i18n";
+import { useChartHealthWarning } from "@/composables/useChartHealthWarning";
 
-defineProps({
-  visible: { type: Boolean, default: false },
-  popoverId: { type: String, required: true },
-  groups: { type: String, default: "" },
+const props = defineProps({
+  log: { type: Array, default: () => [] },
+  sensorId: { type: [String, Number], default: "" },
+  legendKey: { type: String, default: null },
 });
 
 const { t } = useI18n();
+
+const { visible, metricsLabel, popoverId } = useChartHealthWarning(toRefs(props));
 </script>
 
 <style scoped>

@@ -6,6 +6,12 @@ import { idbschemas } from "@config";
 
 // Проверка датчиков на стабильную работу
 
+/** Sorted log points for health checks — full chart / visible period array. */
+function healthCheckLogs(logArr) {
+  if (!Array.isArray(logArr) || logArr.length === 0) return [];
+  return [...logArr].sort((a, b) => Number(a?.timestamp) - Number(b?.timestamp));
+}
+
 // Воздух
 /**
  * Проверяет, что значения слишком стабильны (залипли) - std слишком маленькое
@@ -203,6 +209,35 @@ export function checkAlwaysZeroPM25(pm25Values) {
 }
 
 /**
+ * Проверяет, что PM10 почти всегда = 0 (залип на нуле / занижен)
+ * @param {number[]} pm10Values
+ * @returns {boolean}
+ */
+export function checkAlwaysZeroPM10(pm10Values) {
+  const MIN_HOURS = 10;
+  const THRESHOLD = 0.9;
+
+  if (pm10Values.length < MIN_HOURS) return false;
+
+  let zeroCount = 0;
+  let totalCount = 0;
+
+  for (const v of pm10Values) {
+    if (v !== undefined && v !== null) {
+      totalCount++;
+      if (v < 1) zeroCount++;
+    }
+  }
+
+  if (totalCount < MIN_HOURS) return false;
+
+  const nonZeroCount = totalCount - zeroCount;
+  if (nonZeroCount >= 2) return false;
+
+  return zeroCount / totalCount >= THRESHOLD;
+}
+
+/**
  * Проверяет, что шум (avg/max) почти всегда = 0 (канал "залип" на нуле / сломан).
  * В отличие от PM, для шума постоянный ноль практически не реалистичен.
  * @param {Array} logArr - массив логов
@@ -213,11 +248,8 @@ export function checkAlwaysZeroNoise(logArr) {
   const THRESHOLD = 0.95; // 95%+ нулей
   if (!Array.isArray(logArr) || logArr.length < MIN_POINTS) return false;
 
-  // Берём длинное окно, чтобы не ловить короткие "тихие" отрезки
-  const now = Math.max(...logArr.map((d) => Number(d?.timestamp) || 0));
-  if (!Number.isFinite(now) || now <= 0) return false;
-  const windowSeconds = 24 * 3600;
-  const windowLogs = logArr.filter((d) => now - Number(d?.timestamp) <= windowSeconds);
+  // Берём все точки видимого периода (день / неделя / месяц на графике)
+  const windowLogs = healthCheckLogs(logArr);
   if (windowLogs.length < MIN_POINTS) return false;
 
   let total = 0;
@@ -244,28 +276,30 @@ export function checkAlwaysZeroNoise(logArr) {
 
 
 /**
- * Проверяет стабильность PM за последние 5 часов
+ * Проверяет стабильность PM за видимый на графике период
  * @param {Array} logArr - массив логов с timestamp и data
  * @returns {Object} - результаты всех проверок
  */
 export function checkStability(logArr) {
   if (!logArr || logArr.length < 2) return {};
 
-  const FIVE_HOURS = 5 * 3600; // секунды
-  const now = Math.max(...logArr.map(d => d.timestamp));
-  const last5h = logArr.filter(d => now - d.timestamp <= FIVE_HOURS);
+  const logs = healthCheckLogs(logArr);
+  const pm25Values = logs.map((d) => d.data.pm25);
+  const pm10Values = logs.map((d) => d.data.pm10);
 
-  const pm25Values = last5h.map(d => d.data.pm25);
-  const pm10Values = last5h.map(d => d.data.pm10);
+  const stableStdPM25 = checkStdDeviation(pm25Values, 0.3);
+  const stableStdPM10 = checkStdDeviation(pm10Values, 0.5);
 
   return {
-    // Проверка на "залипшие" значения - слишком маленькое отклонение
-    // Увеличиваем пороги: PM2.5 < 0.3, PM10 < 0.5 
-    stableStd: checkStdDeviation(pm25Values, 0.3) && checkStdDeviation(pm10Values, 0.5),
+    // Залипание хотя бы одного канала — подозрительно (раньше требовались оба)
+    stableStd: stableStdPM25 || stableStdPM10,
+    stableStdPM25,
+    stableStdPM10,
     instantJumps: checkInstantJumps(pm25Values) || checkInstantJumps(pm10Values),
     lowRatio: checkLowRatio(pm25Values, pm10Values),
     impossiblePM: checkImpossiblePM(pm25Values, pm10Values),
-    alwaysZeroPM25: checkAlwaysZeroPM25(pm25Values)
+    alwaysZeroPM25: checkAlwaysZeroPM25(pm25Values),
+    alwaysZeroPM10: checkAlwaysZeroPM10(pm10Values),
   };
 }
 
@@ -318,23 +352,18 @@ export function checkRH100ForTooLong(logArr) {
 }
 
 /**
- * Проверяет, что RH и T не меняются вообще в течение 5 часов
+ * Проверяет, что RH и T не меняются вообще на видимом периоде
  * @param {Array} logArr - массив логов с timestamp и data
  * @returns {boolean}
  */
 export function checkNoChangeInRHAndT(logArr) {
-  const FIVE_HOURS = 5 * 3600; // секунды
   if (!logArr || logArr.length < 2) return false;
 
-  const now = Math.max(...logArr.map(d => d.timestamp));
-  const last5h = logArr
-    .filter(d => now - d.timestamp <= FIVE_HOURS)
-    .sort((a, b) => a.timestamp - b.timestamp);
+  const logs = healthCheckLogs(logArr);
+  if (logs.length < 2) return false;
 
-  if (last5h.length < 2) return false;
-
-  const rhValues = last5h.map(d => d?.data?.humidity).filter(v => v !== undefined && v !== null);
-  const tValues = last5h.map(d => d?.data?.temperature).filter(v => v !== undefined && v !== null);
+  const rhValues = logs.map((d) => d?.data?.humidity).filter((v) => v !== undefined && v !== null);
+  const tValues = logs.map((d) => d?.data?.temperature).filter((v) => v !== undefined && v !== null);
 
   if (rhValues.length < 2 || tValues.length < 2) return false;
 
@@ -357,15 +386,10 @@ export function checkNoChangeInRHAndT(logArr) {
 export function checkRHInstantJumps(logArr) {
   if (!logArr || logArr.length < 3) return false;
 
-  const now = Math.max(...logArr.map(d => d.timestamp));
-  const FIVE_HOURS = 5 * 3600;
-  const last5h = logArr
-    .filter(d => now - d.timestamp <= FIVE_HOURS)
-    .sort((a, b) => a.timestamp - b.timestamp);
+  const logs = healthCheckLogs(logArr);
+  if (logs.length < 3) return false;
 
-  if (last5h.length < 3) return false;
-
-  const rhValues = last5h.map(d => d?.data?.humidity).filter(v => v !== undefined && v !== null);
+  const rhValues = logs.map((d) => d?.data?.humidity).filter((v) => v !== undefined && v !== null);
   if (rhValues.length < 3) return false;
 
   const JUMP_THRESHOLD = 30; // порог для резкого скачка (например, 60 → 20 = 40)
@@ -394,20 +418,14 @@ export function checkRHInstantJumps(logArr) {
 
 // Шум
 /**
- * Собирает метрики шума за длинное окно (по умолчанию 24 часа),
- * чтобы отличать "тихо, но исправно" от реально залипшего канала.
+ * Собирает метрики шума за видимый на графике период.
  * @param {Array} logArr
- * @param {number} windowSeconds
  * @returns {Object|null}
  */
-function getNoiseStats(logArr, windowSeconds = 24 * 3600) {
+function getNoiseStats(logArr) {
   if (!logArr || logArr.length < 10) return null;
 
-  const now = Math.max(...logArr.map(d => d.timestamp));
-  const windowLogs = logArr
-    .filter(d => now - d.timestamp <= windowSeconds)
-    .sort((a, b) => a.timestamp - b.timestamp);
-
+  const windowLogs = healthCheckLogs(logArr);
   if (windowLogs.length < 10) return null;
 
   const avgValues = [];
@@ -463,8 +481,6 @@ function getNoiseStats(logArr, windowSeconds = 24 * 3600) {
   };
 }
 
-const NOISE_WEEK_SECONDS = 7 * 24 * 3600;
-
 /**
  * Прямое правило: если шум "залип" около высокого уровня (80+ dB)
  * на протяжении 12+ часов ВНУТРИ ОДНОГО ДНЯ, считаем это проблемой датчика.
@@ -516,7 +532,7 @@ export function checkNoiseLongFlatline80(logArr) {
  * @returns {boolean}
  */
 export function checkNoiseAvgMaxSame(logArr) {
-  const stats = getNoiseStats(logArr, NOISE_WEEK_SECONDS);
+  const stats = getNoiseStats(logArr);
   if (!stats) return false;
 
   // Вариант 1: доминирующая пара значений и почти полное совпадение avg/max.
@@ -553,7 +569,7 @@ export function checkNoiseAvgMaxSame(logArr) {
  * @returns {boolean}
  */
 export function checkNoiseTooLow(logArr) {
-  const stats = getNoiseStats(logArr, NOISE_WEEK_SECONDS);
+  const stats = getNoiseStats(logArr);
   if (!stats) return false;
 
   // Очень низкий и почти "цифровой" шум долгое время — это скорее поломка канала.
@@ -576,7 +592,7 @@ export function checkNoiseTooLow(logArr) {
  * @returns {boolean}
  */
 export function checkNoiseNoChange(logArr) {
-  const stats = getNoiseStats(logArr, NOISE_WEEK_SECONDS);
+  const stats = getNoiseStats(logArr);
   if (!stats) return false;
 
   // Недельный паттерн "залипания": почти неизменный сигнал в течение долгого времени.
@@ -626,6 +642,196 @@ export function checkNoiseStability(logArr) {
 
 /** Порядок категорий в UI (агрегат), в записи дня IDB и в объекте дня. */
 const HEALTH_DAY_KEYS = ["pm", "climate", "noise"];
+
+/** Failed health check → metric ids for chart warning labels (fallback without log). */
+export const HEALTH_CHECK_METRICS = {
+  pm: {
+    stableStd: ["pm25", "pm10"],
+    stableStdPM25: ["pm25"],
+    stableStdPM10: ["pm10"],
+    instantJumps: ["pm25", "pm10"],
+    lowRatio: ["pm25", "pm10"],
+    impossiblePM: ["pm25", "pm10"],
+    alwaysZeroPM25: ["pm25"],
+    alwaysZeroPM10: ["pm10"],
+  },
+  climate: {
+    rh100TooLong: ["humidity"],
+    noChange: ["temperature", "humidity"],
+    instantJumps: ["humidity"],
+  },
+  noise: {
+    avgMaxSame: ["noiseavg", "noisemax"],
+    tooLow: ["noiseavg", "noisemax"],
+    noChange: ["noiseavg", "noisemax"],
+    longFlatline80: ["noiseavg", "noisemax"],
+    alwaysZero: ["noiseavg", "noisemax"],
+  },
+};
+
+const HEALTH_CATEGORY_META_KEYS = new Set(["isHealthy", "healthy", "checks", "userhide"]);
+
+function normalizeChecksObject(catOrChecks) {
+  if (!catOrChecks || typeof catOrChecks !== "object") return {};
+  if (catOrChecks.checks && typeof catOrChecks.checks === "object") {
+    return catOrChecks.checks;
+  }
+  const out = {};
+  for (const [key, value] of Object.entries(catOrChecks)) {
+    if (!HEALTH_CATEGORY_META_KEYS.has(key) && typeof value === "boolean") {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+/** Whether a category aggregate / check result should show a warning. */
+export function isLogsHealthCategoryUnhealthy(categoryState) {
+  if (!categoryState || typeof categoryState !== "object") return false;
+  if (categoryState.healthy === false) return true;
+  return Object.values(normalizeChecksObject(categoryState)).some((v) => v === true);
+}
+
+/** Metric ids that failed health checks in a category. */
+export function unhealthyMetricIdsForCategory(categoryKey, checksLike) {
+  const checks = normalizeChecksObject(checksLike);
+  const mapping = HEALTH_CHECK_METRICS[categoryKey];
+  if (!mapping) return [];
+  const ids = new Set();
+  for (const [checkName, failed] of Object.entries(checks)) {
+    if (failed !== true) continue;
+    const metrics = mapping[checkName];
+    if (Array.isArray(metrics)) {
+      metrics.forEach((id) => ids.add(id));
+    }
+  }
+  return [...ids];
+}
+
+const PM_METRIC_ORDER = ["pm25", "pm10"];
+const CLIMATE_METRIC_ORDER = ["temperature", "humidity"];
+const NOISE_METRIC_ORDER = ["noiseavg", "noisemax"];
+
+function sortMetricIds(ids, preferredOrder) {
+  const set = new Set(ids);
+  const ordered = preferredOrder.filter((id) => set.has(id));
+  for (const id of set) {
+    if (!ordered.includes(id)) ordered.push(id);
+  }
+  return ordered;
+}
+
+function pmValuesFromLog(logArr) {
+  if (!Array.isArray(logArr) || logArr.length < 2) {
+    return { pm25Values: [], pm10Values: [] };
+  }
+  const logs = healthCheckLogs(logArr);
+  return {
+    pm25Values: logs.map((d) => d?.data?.pm25),
+    pm10Values: logs.map((d) => d?.data?.pm10),
+  };
+}
+
+function pmMetricHasData(values) {
+  return values.some((v) => v !== undefined && v !== null && Number.isFinite(Number(v)));
+}
+
+function resolvePmUnhealthyMetricIds(checks, logArr) {
+  const anyFailed = Object.values(checks).some((v) => v === true);
+  if (!anyFailed) return [];
+
+  const ids = new Set();
+
+  if (Array.isArray(logArr) && logArr.length > 1) {
+    const { pm25Values, pm10Values } = pmValuesFromLog(logArr);
+
+    if (checks.stableStd || checks.stableStdPM25 || checks.stableStdPM10) {
+      if (pmMetricHasData(pm25Values)) ids.add("pm25");
+      if (pmMetricHasData(pm10Values)) ids.add("pm10");
+    }
+
+    if (checkStdDeviation(pm25Values, 0.3)) ids.add("pm25");
+    if (checkStdDeviation(pm10Values, 0.5)) ids.add("pm10");
+    if (checkAlwaysZeroPM25(pm25Values)) ids.add("pm25");
+    if (checkAlwaysZeroPM10(pm10Values)) ids.add("pm10");
+
+    if (checks.instantJumps) {
+      if (checkInstantJumps(pm25Values)) ids.add("pm25");
+      if (checkInstantJumps(pm10Values)) ids.add("pm10");
+    }
+
+    if (checks.impossiblePM || checks.lowRatio) {
+      ids.add("pm25");
+      ids.add("pm10");
+    }
+  }
+
+  if (!ids.size) {
+    unhealthyMetricIdsForCategory("pm", checks).forEach((id) => ids.add(id));
+  }
+
+  return sortMetricIds(ids, PM_METRIC_ORDER);
+}
+
+function resolveClimateUnhealthyMetricIds(checks, logArr) {
+  const anyFailed = Object.values(checks).some((v) => v === true);
+  if (!anyFailed) return [];
+
+  const ids = new Set();
+  if (checks.rh100TooLong) ids.add("humidity");
+  if (checks.instantJumps) ids.add("humidity");
+
+  if (checks.noChange && Array.isArray(logArr) && logArr.length > 1) {
+    const logs = healthCheckLogs(logArr);
+    const rhValues = logs
+      .map((d) => d?.data?.humidity)
+      .filter((v) => v !== undefined && v !== null);
+    const tValues = logs
+      .map((d) => d?.data?.temperature)
+      .filter((v) => v !== undefined && v !== null);
+    const EPSILON = 0.01;
+
+    if (rhValues.length >= 2 && rhValues.every((v) => Math.abs(v - rhValues[0]) < EPSILON)) {
+      ids.add("humidity");
+    }
+    if (tValues.length >= 2 && tValues.every((v) => Math.abs(v - tValues[0]) < EPSILON)) {
+      ids.add("temperature");
+    }
+  } else if (checks.noChange) {
+    ids.add("temperature");
+    ids.add("humidity");
+  }
+
+  if (!ids.size) {
+    unhealthyMetricIdsForCategory("climate", checks).forEach((id) => ids.add(id));
+  }
+
+  return sortMetricIds(ids, CLIMATE_METRIC_ORDER);
+}
+
+function resolveNoiseUnhealthyMetricIds(checks) {
+  const ids = unhealthyMetricIdsForCategory("noise", checks);
+  return sortMetricIds(ids, NOISE_METRIC_ORDER);
+}
+
+/**
+ * Metric ids for chart warning: per-metric resolution when log is available.
+ */
+export function resolveUnhealthyMetricIds(categoryKey, checksLike, logArr = null) {
+  const checks = normalizeChecksObject(checksLike);
+  if (!Object.values(checks).some((v) => v === true)) return [];
+
+  switch (categoryKey) {
+    case "pm":
+      return resolvePmUnhealthyMetricIds(checks, logArr);
+    case "climate":
+      return resolveClimateUnhealthyMetricIds(checks, logArr);
+    case "noise":
+      return resolveNoiseUnhealthyMetricIds(checks);
+    default:
+      return unhealthyMetricIdsForCategory(categoryKey, checks);
+  }
+}
 
 /** Сырые проверки по категории (до categoryHealthFromChecks / dayCategoryFromChecks). */
 const HEALTH_CHECKS_BY_CATEGORY = {
@@ -704,7 +910,9 @@ const logsHealthStoreName = sensorsIdbSchema?.stores?.[LOGS_HEALTH_STORE]
   : null;
 
 function defaultLogsHealthUi() {
-  return Object.fromEntries(HEALTH_DAY_KEYS.map((key) => [key, { healthy: true }]));
+  return Object.fromEntries(
+    HEALTH_DAY_KEYS.map((key) => [key, { healthy: true, checks: {} }])
+  );
 }
 
 /** Дефолтное тело категории в записи дня (IDB), до мержа из логов. */
@@ -726,10 +934,13 @@ const HEALTHY_DAY_EMPTY_BY_CATEGORY = {
   pm: {
     isHealthy: true,
     alwaysZeroPM25: false,
+    alwaysZeroPM10: false,
     impossiblePM: false,
     instantJumps: false,
     lowRatio: false,
     stableStd: false,
+    stableStdPM25: false,
+    stableStdPM10: false,
   },
 };
 
@@ -800,6 +1011,7 @@ export function aggregateLogsHealthForVisible(record, visibleDates) {
   if (!dates.length) return defaultLogsHealthUi();
 
   const ok = Object.fromEntries(HEALTH_DAY_KEYS.map((key) => [key, true]));
+  const mergedChecks = Object.fromEntries(HEALTH_DAY_KEYS.map((key) => [key, {}]));
   const categoryLooksHealthy = (cat) =>
     !cat || typeof cat !== "object" || cat.isHealthy !== false;
 
@@ -807,10 +1019,16 @@ export function aggregateLogsHealthForVisible(record, visibleDates) {
     const day = record[date];
     if (!day || typeof day !== "object" || day.userhide) continue;
     for (const key of HEALTH_DAY_KEYS) {
-      if (!categoryLooksHealthy(day[key])) ok[key] = false;
+      const cat = day[key];
+      if (!categoryLooksHealthy(cat)) ok[key] = false;
+      for (const [checkName, checkVal] of Object.entries(normalizeChecksObject(cat))) {
+        if (checkVal === true) mergedChecks[key][checkName] = true;
+      }
     }
   }
-  return Object.fromEntries(HEALTH_DAY_KEYS.map((key) => [key, { healthy: ok[key] }]));
+  return Object.fromEntries(
+    HEALTH_DAY_KEYS.map((key) => [key, { healthy: ok[key], checks: mergedChecks[key] }])
+  );
 }
 
 function resolveVisibleDates(logs, context) {
