@@ -22,7 +22,8 @@
         </div>
         <font-awesome-icon icon="fa-solid fa-caret-down" class="panel-trigger__caret" aria-hidden="true" />
       </button>
-      <div v-else-if="isOwnerLoading" class="panel-skeleton panel-skeleton--trigger" aria-hidden="true" />
+      <div v-else-if="isOwnerLoading && sensorType !== 'diy'" class="panel-skeleton panel-skeleton--trigger" aria-hidden="true" />
+      <div v-else-if="sensorType === 'diy'" class="panel-owner-spacer" aria-hidden="true" />
       <div
         v-else
         class="panel-trigger panel-trigger--owner panel-trigger--placeholder"
@@ -155,7 +156,7 @@
 import { computed, ref, watch, inject } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMap } from "@/composables/useMap";
-import { useSensors, formatSensorIdShort, isPanelSensorPickerReady, isPanelOwnerLoading } from "@/composables/useSensors";
+import { useSensors, formatSensorIdShort, isPanelSensorPickerReady, isPanelOwnerLoading, resolveSensorType } from "@/composables/useSensors";
 import { useAccounts } from "@/composables/useAccounts";
 import { getAvatar } from "@/utils/avatarGenerator";
 import {
@@ -195,6 +196,7 @@ const ownerPlaceholderMeta = formatSensorIdShort("000000000000000000000000000000
 
 const isSensorPickerReady = computed(() => isPanelSensorPickerReady(props.point));
 const isOwnerLoading = computed(() => isPanelOwnerLoading(props.point));
+const sensorType = computed(() => resolveSensorType(props.point, props.log));
 
 const isOwnerLoggedIn = computed(() => {
   const owner = ownerKey.value;

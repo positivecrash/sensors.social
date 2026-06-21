@@ -1031,6 +1031,12 @@ table img {
   height: 3.75rem;
 }
 
+.panel-owner-spacer {
+  width: 9.5rem;
+  height: 3.75rem;
+  flex-shrink: 0;
+}
+
 .panel-skeleton--timeline {
   flex: 1 1 auto;
   min-width: 8rem;
