@@ -1,7 +1,7 @@
 <template>
   <MetaInfo
-    :pageTitle="settings.TITLE"
-    :pageDescription="settings.DESC"
+    :pageTitle="pageTitle"
+    :pageDescription="pageDescription"
     pageImage="/og-default.webp"
   />
   <Header />
@@ -30,7 +30,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, provide } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 
@@ -57,6 +57,8 @@ import {
 import { hasValidCoordinates } from "../utils/utils";
 import { useSensors } from "../composables/useSensors";
 import { useMessages } from "../composables/useMessages";
+import { useSensorPageMeta, SENSOR_PAGE_META_KEY } from "../composables/useSensorPageMeta";
+import { LOG_GEO_ADDRESSES_KEY } from "../composables/useLogGeoAddresses";
 import { dayISO, getPeriodBounds } from "@/utils/date";
 
 const mapState = useMap();
@@ -96,6 +98,29 @@ const {
 const messagesUI = useMessages(localeComputed);
 const { isMessage, messageData, messageGeo, closeMessage, messages, setActiveMessage } =
   messagesUI;
+
+const activeSensorId = computed(() =>
+  String(route.query.sensor || sensorPoint.value?.sensor_id || "").trim()
+);
+
+const sensorLog = computed(() =>
+  Array.isArray(sensorPoint.value?.logs) ? sensorPoint.value.logs : null
+);
+
+const sensorGeo = computed(() => sensorPoint.value?.geo ?? null);
+
+const { logGeoAddresses, pageTitle, pageDescription } = useSensorPageMeta(
+  activeSensorId,
+  sensorLog,
+  sensorGeo,
+  () => sensorPoint.value,
+  () => route.query,
+  mapState,
+  localeComputed
+);
+
+provide(LOG_GEO_ADDRESSES_KEY, logGeoAddresses);
+provide(SENSOR_PAGE_META_KEY, { pageTitle, pageDescription });
 
 const sensorsList = () => (Array.isArray(sensors.value) ? sensors.value : []);
 

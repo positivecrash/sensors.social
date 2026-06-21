@@ -15,7 +15,8 @@
         </button>
 
         <h3 class="sensor-header__address">
-          <template v-if="hasAddress">{{ point.address }}</template>
+          <template v-if="hasAddress">{{ displayAddress }}</template>
+          <span v-else-if="isAddressLoading" class="sensor-header__address-skeleton" aria-hidden="true"></span>
           <span v-else class="sensor-header__address-skeleton" aria-hidden="true"></span>
         </h3>
       </div>
@@ -60,7 +61,7 @@
         </form>
 
         <div class="text-small sensor-header__address">
-          <template v-if="hasAddress">{{ point.address }}</template>
+          <template v-if="hasAddress">{{ displayAddress }}</template>
           <span v-else class="sensor-header__address-skeleton sensor-header__address-skeleton--sub" aria-hidden="true"></span>
         </div>
       </div>
@@ -79,7 +80,7 @@
         </h3>
 
         <div class="text-small sensor-header__address">
-          <template v-if="hasAddress">{{ point.address }}</template>
+          <template v-if="hasAddress">{{ displayAddress }}</template>
           <span v-else class="sensor-header__address-skeleton sensor-header__address-skeleton--sub" aria-hidden="true"></span>
         </div>
       </div>
@@ -192,10 +193,11 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { computed, ref, watch, onMounted, onBeforeUnmount, inject } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMap } from "@/composables/useMap";
 import { useSensors, isSensorAddressReady } from "@/composables/useSensors";
+import { useLogGeoAddresses, LOG_GEO_ADDRESSES_KEY } from "@/composables/useLogGeoAddresses";
 import { getStoriesForSensor, isStoryHidden, storiesLocalKeys } from "@/composables/useStories";
 import { useSensorBookmark } from "@/composables/useBookmarks";
 import { settings } from "@config";
@@ -219,7 +221,19 @@ const localeComputed = computed(() => localStorage.getItem("locale") || locale.v
 const sensorsUI = useSensors(localeComputed);
 
 const point = computed(() => props.point?.value ?? props.point ?? null);
-const hasAddress = computed(() => isSensorAddressReady(point.value));
+
+const log = computed(() => (Array.isArray(point.value?.logs) ? point.value.logs : null));
+
+const injectedGeoAddresses = inject(LOG_GEO_ADDRESSES_KEY, null);
+const logGeoAddresses =
+  injectedGeoAddresses ??
+  useLogGeoAddresses(log, localeComputed, () => point.value?.geo);
+
+const displayAddress = computed(() => logGeoAddresses.headerAddress.value);
+const hasAddress = computed(() => isSensorAddressReady(displayAddress.value));
+const isAddressLoading = computed(
+  () => logGeoAddresses.loading.value && !displayAddress.value && Array.isArray(log.value) && log.value.length > 0
+);
 
 // Активная вкладка
 const activeTab = ref("chart");
@@ -370,15 +384,12 @@ const {
   saveBookmark,
   deleteBookmark,
 } = useSensorBookmark(point, {
-  defaultName: () => point.value?.address || sensor_id.value || "",
+  defaultName: () => displayAddress.value || sensor_id.value || "",
 });
 
 const geo = computed(() => point.value?.geo || { lat: 0, lng: 0 });
 
 const owner = computed(() => point.value?.owner || null);
-
-// Гарантируем, что logs всегда массив
-const log = computed(() => (Array.isArray(point.value?.logs) ? point.value.logs : null));
 
 const closesensor = () => {
   // Просто эмитим событие закрытия - всю логику обрабатывает Main.vue

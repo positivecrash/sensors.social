@@ -106,9 +106,10 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed, onBeforeUnmount, getCurrentInstance, watch } from "vue";
+import { reactive, ref, computed, onBeforeUnmount, getCurrentInstance, watch, inject } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
+import { SENSOR_PAGE_META_KEY } from "@/composables/useSensorPageMeta";
 import { dayISO } from "../../../utils/date";
 import measurements from "../../../measurements";
 import { settings } from "@config";
@@ -134,7 +135,6 @@ const timer = ref(null);
 const { t, locale } = useI18n();
 const { proxy } = getCurrentInstance();
 const route = useRoute();
-const filters = proxy?.$filters || null;
 
 // Выбранные значения
 const selectedProvider = ref(route.query.provider || "realtime");
@@ -313,39 +313,36 @@ watch(
   { immediate: true }
 );
 
-// Данные для превью Open Graph
+const pageMeta = inject(SENSOR_PAGE_META_KEY, null);
+
+function readMetaContent(selector) {
+  if (typeof document === "undefined") return "";
+  return document.querySelector(selector)?.getAttribute("content") || "";
+}
+
+// Preview matches MetaInfo (reactive when sensor / address / URL params change).
 const ogPreviewData = computed(() => {
-  if (!props.point?.sensor_id) return null;
-
-  const sensorId = props.point.sensor_id;
-  const address = props.point.address || "Unknown location";
-  const shortAddress = address.length > 50 ? address.substring(0, 47) + "..." : address;
-
-  // Сокращаем ID датчика используя фильтр collapse (как в Info.vue)
-  const collapsedSensorId = filters?.collapse ? filters.collapse(sensorId) : sensorId;
-
-  // Превью в UI: стабильный ассет из public (per-sensor PNG в /og-images/ может отсутствовать локально)
-  const baseUrl = window.location.origin;
-  const imageUrl = `${baseUrl}/og-default.webp`;
-
-  // Получаем название типа измерения
-  const typeName =
-    typeOptions.value.find((opt) => opt.value === selectedType.value)?.name ||
-    selectedType.value.toUpperCase();
-
-  // Формируем описание с сокращенным ID датчика
-  const description =
-    selectedProvider.value === "realtime"
-      ? `Real-time ${typeName} measurements from sensor ${collapsedSensorId} at ${address}.`
-      : `${typeName} measurements from sensor ${collapsedSensorId} at ${address}${
-          selectedDate.value ? ` on ${selectedDate.value}` : ""
-        }.`;
-
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
   return {
-    siteName: settings?.SITE_NAME || "Sensors.social",
-    title: `${shortAddress} - ${settings?.TITLE || "Sensors map"}`,
-    description: description,
-    image: imageUrl,
+    siteName:
+      readMetaContent('meta[property="og:site_name"]') ||
+      settings?.SITE_NAME ||
+      "Sensors.social",
+    title:
+      pageMeta?.pageTitle?.value ||
+      readMetaContent('meta[property="og:title"]') ||
+      (typeof document !== "undefined" ? document.title : "") ||
+      settings?.TITLE ||
+      "",
+    description:
+      pageMeta?.pageDescription?.value ||
+      readMetaContent('meta[name="description"]') ||
+      readMetaContent('meta[property="og:description"]') ||
+      settings?.DESC ||
+      "",
+    image:
+      readMetaContent('meta[property="og:image"]') ||
+      (origin ? `${origin}/og-default.webp` : "/og-default.webp"),
     url: generatedLink.value,
   };
 });

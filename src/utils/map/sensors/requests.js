@@ -117,6 +117,33 @@ export function sensorTypeFromDeviceModel(deviceModel) {
 }
 
 /**
+ * Infer Urban vs Insight when Roseman omits device_model on bundle entries.
+ * Insight: CO₂ without PM; Urban: PM and/or noise metrics.
+ */
+export function inferDeviceTypeFromLog(log) {
+  if (!Array.isArray(log) || log.length === 0) return null;
+
+  const keys = new Set();
+  const sample = log.length > 100 ? log.slice(-100) : log;
+  for (const item of sample) {
+    const data = item?.data;
+    if (!data || typeof data !== "object") continue;
+    for (const key of Object.keys(data)) {
+      keys.add(String(key).toLowerCase());
+    }
+  }
+  if (keys.size === 0) return null;
+
+  const hasCo2 = keys.has("co2");
+  const hasPm = keys.has("pm25") || keys.has("pm10");
+  const hasNoise = keys.has("noiseavg") || keys.has("noisemax") || keys.has("noise");
+
+  if (hasCo2 && !hasPm) return "insight";
+  if (hasPm || hasNoise) return "urban";
+  return null;
+}
+
+/**
  * Normalized bundle devices from v2 `sensor.sensors` (supports legacy string[] too).
  */
 export function listBundleSensorEntries(meta) {
@@ -1040,12 +1067,16 @@ export function getOwnerSensorsWithData(
       const points = Array.isArray(data[id]) ? data[id] : [];
       const hasData = points.length > 0;
       const geo = geoFromLogPoints(points);
+      const inferredType = inferDeviceTypeFromLog(points);
       return {
         id,
         hasData: hasData && hasValidCoordinates(geo),
-        type: hasData && hasValidCoordinates(geo) ? sensorTypeFromDeviceModel(device_model) : null,
+        type:
+          sensorTypeFromDeviceModel(device_model) ||
+          inferredType ||
+          null,
         geo: hasValidCoordinates(geo) ? geo : null,
-        device_model: device_model || null,
+        device_model: device_model || inferredType || null,
       };
     })
     .filter((entry) => {
@@ -1273,6 +1304,12 @@ export async function fetchSensorCities() {
 
 const SENSOR_IDB_TTL = 24 * 60 * 60 * 1000; // 24 часа
 
+function stripSensorCacheAddress(entry) {
+  if (!entry || !("address" in entry)) return entry;
+  const { address: _removed, ...rest } = entry;
+  return rest;
+}
+
 function readSensorIdbEntry(sensorId) {
   const sensorKey = String(sensorId || "");
   if (!sensorKey) return Promise.resolve(null);
@@ -1280,7 +1317,19 @@ function readSensorIdbEntry(sensorId) {
   return new Promise((resolve) => {
     IDBworkflow("Sensors", "sensorData", "readonly", (store) => {
       const request = store.get(sensorKey);
-      request.onsuccess = () => resolve(request.result || null);
+      request.onsuccess = () => {
+        const result = request.result || null;
+        if (result && "address" in result) {
+          const cleaned = stripSensorCacheAddress(result);
+          IDBworkflow("Sensors", "sensorData", "readwrite", (writeStore) => {
+            writeStore.put(cleaned);
+          });
+          notifyDBChange("Sensors", "sensorData");
+          resolve(cleaned);
+          return;
+        }
+        resolve(result);
+      };
       request.onerror = () => resolve(null);
     });
   });
@@ -1292,7 +1341,7 @@ function isFreshSensorIdbEntry(entry) {
 }
 
 /**
- * Cached sensor meta from IndexedDB (owner, type, address).
+ * Cached sensor meta from IndexedDB (owner, type).
  * Avoids repeat API calls when logs were loaded in this session or recently.
  */
 export async function getCachedSensorIdbMeta(sensorId) {
@@ -1302,7 +1351,6 @@ export async function getCachedSensorIdbMeta(sensorId) {
     return {
       owner: entry.owner ?? null,
       type: entry.type ?? null,
-      address: entry.address ?? null,
     };
   } catch (error) {
     console.error("Error getting cached sensor IDB meta:", error);
@@ -1318,7 +1366,7 @@ export async function getCachedSensorIdbMeta(sensorId) {
  */
 async function getCachedData(sensorId, dates) {
   try {
-    const cachedData = { data: {}, address: null, owner: null, type: null, lastUpdated: 0 };
+    const cachedData = { data: {}, owner: null, type: null, lastUpdated: 0 };
     const sensorData = await readSensorIdbEntry(sensorId);
 
     if (sensorData && isFreshSensorIdbEntry(sensorData)) {
@@ -1327,7 +1375,6 @@ async function getCachedData(sensorId, dates) {
           cachedData.data[date] = sensorData.data[date];
         }
       }
-      cachedData.address = sensorData.address || null;
       cachedData.owner = sensorData.owner ?? null;
       cachedData.type = sensorData.type ?? null;
       cachedData.lastUpdated = Number(sensorData.lastUpdated || 0);
@@ -1336,7 +1383,7 @@ async function getCachedData(sensorId, dates) {
     return cachedData;
   } catch (error) {
     console.error("Error getting cached data:", error);
-    return { data: {}, address: null, owner: null, type: null, lastUpdated: 0 };
+    return { data: {}, owner: null, type: null, lastUpdated: 0 };
   }
 }
 
@@ -1344,50 +1391,44 @@ async function getCachedData(sensorId, dates) {
  * Сохраняет данные в кэш
  * @param {string} sensorId - ID сенсора
  * @param {Object} dataByDate - объект с данными по дням
- * @param {string|null} address - адрес сенсора (опционально)
+ * @param {Object} meta - owner, type (optional)
  */
 async function saveToCache(sensorId, dataByDate, meta = {}) {
   try {
     const sensorKey = sensorId;
     const now = Date.now();
-    const { address = null, owner = null, type = null } = meta;
+    const { owner = null, type = null } = meta;
 
-    // Получаем существующие данные сенсора
     const existingData = await new Promise((resolve) => {
       IDBworkflow("Sensors", "sensorData", "readonly", (store) => {
         const request = store.get(sensorKey);
 
         request.onsuccess = () => {
-          resolve(request.result || { data: {}, address: null });
+          resolve(request.result || { data: {} });
         };
 
         request.onerror = () => {
-          resolve({ data: {}, address: null });
+          resolve({ data: {} });
         };
       });
     });
 
-    // Объединяем существующие данные с новыми
     const updatedData = {
       ...existingData.data,
       ...dataByDate,
     };
 
-    // Сохраняем адрес (новый или существующий)
-    const finalAddress = address || existingData.address || null;
     const finalOwner = owner ?? existingData.owner ?? null;
     const finalType = type ?? existingData.type ?? null;
 
-    // Создаем или обновляем запись сенсора
-    const cacheEntry = {
+    const cacheEntry = stripSensorCacheAddress({
       id: sensorKey,
       data: updatedData,
-      address: finalAddress,
       owner: finalOwner,
       type: finalType,
       lastUpdated: now,
-      ttl: 24 * 60 * 60 * 1000, // 24 часа
-    };
+      ttl: 24 * 60 * 60 * 1000,
+    });
 
     IDBworkflow("Sensors", "sensorData", "readwrite", (store) => {
       store.put(cacheEntry);
@@ -1455,64 +1496,17 @@ export async function clearAllCache() {
 }
 
 /**
- * Получает кэшированный адрес сенсора
- * @param {string} sensorId - ID сенсора
- * @returns {Promise<string|null>} адрес сенсора или null
+ * @deprecated Addresses are stored per geo in the `addresses` IDB store. Use geoAddresses.js.
  */
-export async function getCachedAddress(sensorId) {
-  try {
-    const meta = await getCachedSensorIdbMeta(sensorId);
-    return meta?.address || null;
-  } catch (error) {
-    console.error("Error getting cached address:", error);
-    return null;
-  }
+export async function getCachedAddress() {
+  return null;
 }
 
 /**
- * Сохраняет адрес сенсора в кэш
- * @param {string} sensorId - ID сенсора
- * @param {string} address - адрес сенсора
+ * @deprecated Addresses are stored per geo in the `addresses` IDB store. Use geoAddresses.js.
  */
-export async function saveAddressToCache(sensorId, address) {
-  try {
-    const sensorKey = sensorId;
-
-    // Получаем существующие данные сенсора
-    const existingData = await new Promise((resolve) => {
-      IDBworkflow("Sensors", "sensorData", "readonly", (store) => {
-        const request = store.get(sensorKey);
-
-        request.onsuccess = () => {
-          resolve(request.result || { data: {}, address: null });
-        };
-
-        request.onerror = () => {
-          resolve({ data: {}, address: null });
-        };
-      });
-    });
-
-    // Обновляем только адрес, сохраняя существующие данные
-    const cacheEntry = {
-      id: sensorKey,
-      data: existingData.data || {},
-      address: address,
-      owner: existingData.owner ?? null,
-      type: existingData.type ?? null,
-      lastUpdated: Date.now(),
-      ttl: 24 * 60 * 60 * 1000, // 24 часа
-    };
-
-    IDBworkflow("Sensors", "sensorData", "readwrite", (store) => {
-      store.put(cacheEntry);
-    });
-
-    // Уведомляем об изменениях в кэше
-    notifyDBChange("Sensors", "sensorData");
-  } catch (error) {
-    console.error("Error saving address to cache:", error);
-  }
+export async function saveAddressToCache() {
+  return;
 }
 
 /**
@@ -1617,7 +1611,6 @@ export async function getSensorDataWithCache(
     // Проверяем что есть в кэше (включая адрес)
     const cachedResult = await getCachedData(sensorId, neededDays);
     const cachedData = cachedResult.data;
-    const cachedAddress = cachedResult.address;
 
     // Определяем текущий день
     const today = new Date().toISOString().split("T")[0];
@@ -1709,7 +1702,6 @@ export async function getSensorDataWithCache(
       // Сохраняем только успешно загруженные данные (массивы)
       if (Object.keys(newData).length > 0) {
         await saveToCache(sensorId, newData, {
-          address: cachedAddress,
           owner: cacheMeta?.owner ?? null,
           type: cacheMeta?.type ?? null,
         });
@@ -1756,7 +1748,6 @@ export async function getSensorDataWithCache(
     }
 
     // Добавляем метаданные из кэша для использования в компонентах
-    result._cachedAddress = cachedAddress;
     result._cachedOwner = cachedResult.owner ?? null;
     result._cachedType = cachedResult.type ?? null;
     emitProgress({ status: "done", loadedDays: totalDays, missingDays: 0, totalDays, cachedDays });

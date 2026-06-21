@@ -83,7 +83,13 @@
           :sensor-id="point?.sensor_id"
           :legend-key="chartActiveLegendKey"
         />
-        <Chart :log="log" @active-legend-change="chartActiveLegendKey = $event" />
+        <Chart
+          :log="log"
+          :geo-addresses="chartGeoAddresses"
+          :show-geo-in-tooltip="showChartGeoInTooltip"
+          :address-for-timestamp="chartAddressForTimestamp"
+          @active-legend-change="chartActiveLegendKey = $event"
+        />
       </div>
       <div v-else-if="showNoDataMessage" class="no-data-message">
         {{ $t("No data available") }}
@@ -146,7 +152,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, inject } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMap } from "@/composables/useMap";
 import { useSensors, formatSensorIdShort, isPanelSensorPickerReady, isPanelOwnerLoading } from "@/composables/useSensors";
@@ -162,6 +168,7 @@ import measurements from "../../../measurements";
 import AQI from "../widgets/AQI.vue";
 import Chart from "../widgets/Chart.vue";
 import ChartHealthWarning from "../widgets/ChartHealthWarning.vue";
+import { LOG_GEO_ADDRESSES_KEY } from "@/composables/useLogGeoAddresses";
 import SensorPicker from "../widgets/SensorPicker.vue";
 import Timeline from "../widgets/Timeline.vue";
 // import NativeShare from "../widgets/NativeShare.vue";
@@ -177,6 +184,10 @@ const accountStore = useAccounts();
 const localeComputed = computed(() => localStorage.getItem("locale") || "en");
 const { logsProgress, runLogsHealth } = useSensors(localeComputed);
 const { logsHealth, logsHealthMeta } = useLogsHealth();
+const logGeoAddresses = inject(LOG_GEO_ADDRESSES_KEY, null);
+const chartGeoAddresses = computed(() => logGeoAddresses?.geoAddresses?.value || {});
+const showChartGeoInTooltip = computed(() => Boolean(logGeoAddresses?.showGeoInTooltip?.value));
+const chartAddressForTimestamp = (...args) => logGeoAddresses?.addressForTimestamp?.(...args);
 
 const ownerKey = computed(() => String(props.point?.owner || "").trim());
 const ownerAvatar = ref(null);

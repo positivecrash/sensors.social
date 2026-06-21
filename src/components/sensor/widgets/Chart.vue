@@ -58,7 +58,7 @@
 </template>
 
 <script setup>
-import { ref, watch, computed, nextTick, onMounted } from "vue";
+import { ref, watch, computed, nextTick, onMounted, watchEffect } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import Highcharts from "highcharts";
@@ -77,6 +77,9 @@ Highcharts.setOptions({
 
 const props = defineProps({
   log: { type: Array, default: () => [] },
+  geoAddresses: { type: Object, default: () => ({}) },
+  showGeoInTooltip: { type: Boolean, default: false },
+  addressForTimestamp: { type: Function, default: null },
 });
 
 const emit = defineEmits(["activeLegendChange"]);
@@ -417,6 +420,17 @@ const xAxisConfig = computed(() => {
   };
 });
 
+// Live tooltip context — Highcharts may keep an old formatter; read at hover time.
+const tooltipContext = {
+  showGeo: false,
+  addressFn: null,
+};
+
+watchEffect(() => {
+  tooltipContext.showGeo = props.showGeoInTooltip;
+  tooltipContext.addressFn = props.addressForTimestamp;
+});
+
 // Конфигурация тултипа
 const tooltipConfig = computed(() => ({
   shared: true,
@@ -430,9 +444,27 @@ const tooltipConfig = computed(() => ({
           point.series.userOptions.fullLabel || point.series.name
         }: <b>${point.y.toFixed(2)}</b>`
     );
-    return `<b>${xStr}</b><br/>${rows.join("<br/>")}`;
+    let html = `<b>${xStr}</b><br/>${rows.join("<br/>")}`;
+    if (tooltipContext.showGeo && typeof tooltipContext.addressFn === "function") {
+      const addr = tooltipContext.addressFn(this.x);
+      if (addr) {
+        html += `<br/><span style="opacity:0.85;font-size:0.92em">${addr}</span>`;
+      }
+    }
+    return html;
   },
 }));
+
+watch(
+  () => [props.showGeoInTooltip, props.geoAddresses],
+  () => {
+    const hc = chartRef.value?.chart;
+    if (hc) {
+      hc.update({ tooltip: tooltipConfig.value }, false);
+    }
+  },
+  { deep: true }
+);
 
 // Основная конфигурация графика
 const chartOptions = computed(() => ({

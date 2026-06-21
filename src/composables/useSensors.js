@@ -12,8 +12,6 @@ import {
   getSensors,
   getSensorDataWithCache,
   getMaxData,
-  saveAddressToCache,
-  getCachedAddress,
   getSensorOwner,
   filterOwnerBundleNearAnchor,
   getCachedSensorMeta,
@@ -28,6 +26,7 @@ import {
   rememberMarkerIcon,
   getOwnerSensorsWithData,
   listBundleSensorIds,
+  inferDeviceTypeFromLog,
   listBundleSensorEntries,
   parseBundleSensorEntry,
   preloadSensorMeta,
@@ -42,7 +41,7 @@ import {
   sensorTypeFromDeviceModel,
   rosemanMarkerIconsEnabledForDate,
 } from "../utils/map/sensors/requests";
-import { getAddress, hasValidCoordinates } from "../utils/utils";
+import { hasValidCoordinates } from "../utils/utils";
 import { dayISO, dayBoundsUnix, getPeriodBounds } from "@/utils/date";
 import { loadLogsHealth } from "../utils/calculations/sensor/logs_health.js";
 
@@ -90,7 +89,11 @@ function normalizeSensorLogEntry(item) {
   const ts = Number(item.timestamp);
   const data = item.data;
   if (!Number.isFinite(ts) || !data || typeof data !== "object") return null;
-  return { timestamp: ts, data };
+  const entry = { timestamp: ts, data };
+  if (item.geo && Number.isFinite(Number(item.geo.lat)) && Number.isFinite(Number(item.geo.lng))) {
+    entry.geo = item.geo;
+  }
+  return entry;
 }
 
 function normalizeSensorLogs(logs) {
@@ -122,15 +125,17 @@ function deviceModelToSensorType(deviceModel) {
  * Sensor device kind for UI: diy / insight / urban / altruist.
  * DIY sensors have no owner; Altruist devices use device_model (or cached IDB / bundle type).
  */
-export function resolveSensorType(point) {
+export function resolveSensorType(point, logOverride = null) {
   if (!point) return "diy";
 
   if (!hasSensorOwner(point)) return "diy";
 
-  if (point.idbSensorType) return point.idbSensorType;
-
   const fromModel = deviceModelToSensorType(point.device_model);
   if (fromModel) return fromModel;
+
+  const log = logOverride ?? (Array.isArray(point?.logs) ? point.logs : null);
+  const fromLog = inferDeviceTypeFromLog(log);
+  if (fromLog) return fromLog;
 
   const sid = String(point.sensor_id || "");
   const fromBundle = Array.isArray(point.ownerSensorsWithData)
@@ -139,6 +144,20 @@ export function resolveSensorType(point) {
       )?.type
     : null;
   if (fromBundle) return fromBundle;
+
+  if (sid) {
+    const meta = getCachedSensorMeta(sid);
+    if (meta) {
+      const entry = listBundleSensorEntries(meta).find((e) => String(e.sensor_id) === sid);
+      const fromMeta = sensorTypeFromDeviceModel(entry?.device_model);
+      if (fromMeta) return fromMeta;
+      const fromMetaLog = inferDeviceTypeFromLog(meta?.data?.[sid]);
+      if (fromMetaLog) return fromMetaLog;
+    }
+  }
+
+  const cached = point.idbSensorType;
+  if (cached && cached !== "altruist") return cached;
 
   return "altruist";
 }
@@ -153,9 +172,8 @@ export function formatSensorIdShort(id) {
   return `${s.slice(0, 6)}…${s.slice(-6)}`;
 }
 
-export function isSensorAddressReady(point) {
-  const addr = point?.address;
-  return Boolean(addr) && addr !== "Loading address...";
+export function isSensorAddressReady(address) {
+  return Boolean(address) && address !== "Loading address...";
 }
 
 /** Sensor picker trigger: device type / owner bundle resolved. */
@@ -445,7 +463,7 @@ async function enrichOwnerIdsWithIdbTypes(entries) {
     entries.map(async (entry) => {
       if (entry.type) return;
       const meta = await getCachedSensorIdbMeta(entry.id);
-      if (meta?.type && meta.type !== "diy") {
+      if (meta?.type && meta.type !== "diy" && meta.type !== "altruist") {
         entry.type = meta.type;
       }
     })
@@ -537,7 +555,11 @@ export function buildSensorPickerRows(point, logSamples = null) {
 
   const rows = entries.map((entry) => {
     const id = String(entry.id);
-    const type = entry.type || sensorTypeFromDeviceModel(entry.device_model) || "urban";
+    const type =
+      entry.type ||
+      sensorTypeFromDeviceModel(entry.device_model) ||
+      (id === currentId ? inferDeviceTypeFromLog(logSamples) || resolveSensorType(point, logSamples) : null) ||
+      "urban";
     return {
       type,
       sensorId: id,
@@ -547,7 +569,7 @@ export function buildSensorPickerRows(point, logSamples = null) {
 
   if (currentId && !rows.some((r) => r.state === "active")) {
     rows.unshift({
-      type: resolveSensorType(point),
+      type: resolveSensorType(point, logSamples),
       sensorId: currentId,
       state: "active",
     });
@@ -564,10 +586,7 @@ function mergePointWithIdbMeta(point, meta) {
   if (!normalizeOwnerKey(next) && meta.owner) {
     next.owner = meta.owner;
   }
-  if (!next.address && meta.address) {
-    next.address = meta.address;
-  }
-  if (meta.type) {
+  if (meta.type && meta.type !== "altruist") {
     next.idbSensorType = meta.type;
     if (!next.device_model && meta.type !== "diy") {
       next.device_model = meta.type;
@@ -1353,7 +1372,10 @@ export function useSensors(localeComputed) {
       const cacheMeta = cachePoint
         ? {
             owner: normalizeOwnerKey(cachePoint) || null,
-            type: resolveSensorType(cachePoint),
+            type:
+              deviceModelToSensorType(cachePoint.device_model) ||
+              inferDeviceTypeFromLog(cachePoint.logs) ||
+              null,
           }
         : null;
 
@@ -1385,13 +1407,16 @@ export function useSensors(localeComputed) {
       // Проверяем, есть ли кэшированный адрес / owner / type
       if (logArray && sensorPoint.value) {
         const patch = {};
-        if (logArray._cachedAddress) patch.address = logArray._cachedAddress;
         if (logArray._cachedOwner) patch.owner = logArray._cachedOwner;
-        if (logArray._cachedType) {
+        const inferredType = Array.isArray(logArray) ? inferDeviceTypeFromLog(logArray) : null;
+        if (logArray._cachedType && logArray._cachedType !== "altruist") {
           patch.idbSensorType = logArray._cachedType;
           if (!sensorPoint.value.device_model && logArray._cachedType !== "diy") {
             patch.device_model = logArray._cachedType;
           }
+        } else if (inferredType) {
+          patch.idbSensorType = inferredType;
+          patch.device_model = inferredType;
         }
         if (Object.keys(patch).length > 0) {
           sensorPoint.value = { ...sensorPoint.value, ...patch };
@@ -1437,6 +1462,7 @@ export function useSensors(localeComputed) {
           });
         }
 
+        const inferredType = inferDeviceTypeFromLog(logs);
         const ownerSensorsWithData = applyFilteredOwnerBundleOptions(
           sensorPoint.value,
           sensorPoint.value?.ownerSensorsWithData,
@@ -1446,6 +1472,9 @@ export function useSensors(localeComputed) {
           ...sensorPoint.value,
           logs,
           _logsKey: requestedKey,
+          ...(inferredType
+            ? { device_model: inferredType, idbSensorType: inferredType }
+            : null),
           ...(ownerSensorsWithData?.length ? { ownerSensorsWithData } : null),
         };
 
@@ -1734,13 +1763,6 @@ export function useSensors(localeComputed) {
         const sameId = String(prev?.sensor_id || "") === String(next?.sensor_id || "");
         if (!sameId) return next;
 
-        const nextAddr = next.address;
-        const prevAddr = prev.address;
-        const usePrevAddr =
-          (!nextAddr || nextAddr === "Loading address...") &&
-          prevAddr &&
-          prevAddr !== "Loading address...";
-
         const nextOwnerSensors = next.ownerSensorsWithData;
         const prevOwnerSensors = prev.ownerSensorsWithData;
         const anchorGeo = resolveBundleAnchorGeo(
@@ -1758,7 +1780,6 @@ export function useSensors(localeComputed) {
         return {
           ...prev,
           ...next,
-          address: usePrevAddr ? prevAddr : nextAddr,
           owner: next.owner || prev.owner,
           ownerSensorIds: next.ownerSensorIds || prev.ownerSensorIds || null,
           idbSensorType: next.idbSensorType || prev.idbSensorType || null,
@@ -1801,44 +1822,13 @@ export function useSensors(localeComputed) {
         point.owner = String(route.query.owner);
       }
       if (mapState.currentProvider.value === "realtime") {
-        if (!point.address && open?.address) {
-          point.address = open.address;
-        }
+        // preserve popup state only
       }
       if (!point.owner && open?.owner) {
         point.owner = open.owner;
       }
 
-      // Получаем адрес сенсора - сначала из кэша, потом из API
-      if (
-        !point.address &&
-        hasValidCoordinates(point.geo) &&
-        point.address !== "Loading address..."
-      ) {
-        point.address = `Loading address...`;
-
-        // Сначала проверяем кэшированный адрес
-        getCachedAddress(point.sensor_id).then((cachedAddress) => {
-          if (
-            cachedAddress &&
-            sensorPoint.value &&
-            sensorPoint.value.sensor_id === point.sensor_id
-          ) {
-            sensorPoint.value.address = cachedAddress;
-          } else {
-            // Если в кэше нет, получаем из API
-            getAddress(point.geo.lat, point.geo.lng, localeRef.value).then((address) => {
-              if (sensorPoint.value && sensorPoint.value.sensor_id === point.sensor_id && address) {
-                sensorPoint.value.address = address;
-                // Сохраняем адрес в кэш
-                saveAddressToCache(point.sensor_id, address);
-              }
-            });
-          }
-        });
-      }
-
-      // проверяем есть ли изменения в данных сенсора
+      // загружаем owner синхронно, еслиуже пришел
       const foundSensor = sensors.value.find((s) => s.sensor_id === point.sensor_id);
 
       // загружаем owner синхронно, еслиуже пришел
@@ -1863,8 +1853,7 @@ export function useSensors(localeComputed) {
         !foundSensor.geo ||
         !point.geo ||
         foundSensor.geo.lat !== point.geo.lat ||
-        foundSensor.geo.lng !== point.geo.lng ||
-        (!isRealtime && foundSensor.address !== point.address);
+        foundSensor.geo.lng !== point.geo.lng;
 
       const ownerChanged =
         sensorPoint.value?.sensor_id === point.sensor_id &&
@@ -1904,10 +1893,6 @@ export function useSensors(localeComputed) {
         const prevOpen =
           sensorPoint.value && sensorPoint.value.sensor_id === point.sensor_id ? sensorPoint.value : null;
         if (prevOpen) {
-          const prevAddr = prevOpen.address && prevOpen.address !== "Loading address..." ? prevOpen.address : null;
-          if ((!point.address || point.address === "Loading address...") && prevAddr) {
-            point.address = prevAddr;
-          }
           if (!point.owner && prevOpen.owner) {
             point.owner = prevOpen.owner;
           }
