@@ -232,7 +232,7 @@ const logGeoAddresses =
 const displayAddress = computed(() => logGeoAddresses.headerAddress.value);
 const hasAddress = computed(() => isSensorAddressReady(displayAddress.value));
 const isAddressLoading = computed(
-  () => logGeoAddresses.loading.value && !displayAddress.value && Array.isArray(log.value) && log.value.length > 0
+  () => logGeoAddresses.loading.value && !displayAddress.value
 );
 
 // Активная вкладка

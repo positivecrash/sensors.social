@@ -1,5 +1,6 @@
 import { computed, ref, toValue, watch } from "vue";
 import {
+  collectUniqueGeosFromLog,
   ensureLogGeoAddresses,
   geoAddressKey,
   hasMultipleGeosInLog,
@@ -34,6 +35,26 @@ export function useLogGeoAddresses(logSource, localeSource, fallbackGeoSource = 
             if (id !== runId) return;
             addressByKey.value = { ...addressByKey.value, [key]: address };
           });
+
+          // Realtime stream logs often have measurements only (no per-point geo).
+          // Header still uses sensor geo as fallback — resolve it when log has no geos.
+          const fallbackGeo = toValue(fallbackGeoSource);
+          if (
+            collectUniqueGeosFromLog(log).length === 0 &&
+            hasValidCoordinates(fallbackGeo)
+          ) {
+            const key = geoAddressKey(fallbackGeo.lat, fallbackGeo.lng);
+            if (key && !addressByKey.value[key]) {
+              const address = await resolveGeoAddress(
+                fallbackGeo.lat,
+                fallbackGeo.lng,
+                locale || "en"
+              );
+              if (id === runId && key && address) {
+                addressByKey.value = { ...addressByKey.value, [key]: address };
+              }
+            }
+          }
         } finally {
           if (id === runId) loading.value = false;
         }

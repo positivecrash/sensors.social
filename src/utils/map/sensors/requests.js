@@ -248,69 +248,6 @@ function dedupeByOwnerProximity(list, maxKm = OWNER_GEO_CLUSTER_KM) {
 /** Same threshold as map marker drawing (near-null island coords). */
 export const MAP_COORDINATE_TOLERANCE = 0.001;
 
-/**
- * Count map dots for a sensor list: valid geo + owner bundling (5 km).
- * Matches `rebundleOwnerMarkers` / `dedupeSensorsForMap`, not raw device rows.
- */
-function filterDrawableMapSensors(list, { shouldInclude = () => true } = {}) {
-  return (Array.isArray(list) ? list : []).filter((s) => {
-    const sid = s?.sensor_id ? String(s.sensor_id) : "";
-    if (!sid || !shouldInclude(sid)) return false;
-    const lat = Number(s.geo?.lat);
-    const lng = Number(s.geo?.lng);
-    return (
-      Math.abs(lat) >= MAP_COORDINATE_TOLERANCE || Math.abs(lng) >= MAP_COORDINATE_TOLERANCE
-    );
-  });
-}
-
-export function countMapMarkersFromList(list, opts = {}) {
-  return dedupeSensorsForMap(filterDrawableMapSensors(list, opts)).length;
-}
-
-/**
- * Realtime badge: owner-bundled map dots that received pubsub in this session.
- * A cluster counts once any sibling goes live; gap vs daily recap = not publishing now.
- */
-export function countLiveRealtimeMapMarkers(list, liveIds, opts = {}) {
-  const liveSet = new Set(
-    (liveIds instanceof Set ? [...liveIds] : Array.isArray(liveIds) ? liveIds : [])
-      .map((id) => String(id || ""))
-      .filter(Boolean)
-  );
-  if (liveSet.size === 0) return 0;
-
-  const drawable = filterDrawableMapSensors(list, opts);
-  const liveSensors = drawable.filter((s) => liveSet.has(String(s.sensor_id)));
-  if (liveSensors.length === 0) return 0;
-
-  const pool = [];
-  const seen = new Set();
-
-  const push = (s) => {
-    const sid = String(s?.sensor_id || "");
-    if (!sid || seen.has(sid)) return;
-    seen.add(sid);
-    pool.push(s);
-  };
-
-  for (const live of liveSensors) {
-    push(live);
-    const owner = normalizeOwnerKey(live);
-    if (!owner || !hasValidCoordinates(live?.geo)) continue;
-
-    for (const s of drawable) {
-      const sid = String(s.sensor_id);
-      if (seen.has(sid) || normalizeOwnerKey(s) !== owner) continue;
-      if (!hasValidCoordinates(s?.geo)) continue;
-      if (haversineKm(live.geo, s.geo) > OWNER_GEO_CLUSTER_KM) continue;
-      push(s);
-    }
-  }
-
-  return dedupeSensorsForMap(pool).length;
-}
-
 // Импортируем утилиты для работы с IndexedDB
 import {
   IDBworkflow,

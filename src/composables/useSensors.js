@@ -31,8 +31,6 @@ import {
   parseBundleSensorEntry,
   preloadSensorMeta,
   pickOwnerClusterRepresentative,
-  countMapMarkersFromList,
-  countLiveRealtimeMapMarkers,
   normalizeOwnerKey,
   hasSensorOwner,
   haversineKm,
@@ -2253,20 +2251,30 @@ export function useSensors(localeComputed) {
     }
   };
 
-  const mapMarkerCountOpts = () => ({
-    shouldInclude: (id) => !shouldFilterSensor(id),
-  });
-
-  /**
-   * Day: bundled dots from today's API.
-   * Realtime: bundled dots that published on pubsub this session (grows over time).
-   */
-  const mapSensorsCount = computed(() => {
-    const opts = mapMarkerCountOpts();
-    if (mapState.currentProvider.value === "realtime") {
-      return countLiveRealtimeMapMarkers(sensors.value, realtimeLiveSensorIds.value, opts);
+  const collectHeaderSensorIds = (lists) => {
+    const ids = new Set();
+    const addRow = (row) => {
+      if (!row) return;
+      const sid = String(row.sensor_id || "").trim();
+      if (sid && !shouldFilterSensor(sid)) ids.add(sid);
+      for (const entry of row.sensors || []) {
+        const parsed = parseBundleSensorEntry(entry);
+        const bundleId = parsed?.sensor_id;
+        if (bundleId && !shouldFilterSensor(bundleId)) ids.add(bundleId);
+      }
+    };
+    for (const list of lists) {
+      if (Array.isArray(list)) list.forEach(addRow);
     }
-    return countMapMarkersFromList(sensors.value, opts);
+    return ids.size;
+  };
+
+  /** Header counter: unique device IDs from Daily recap API (incl. no-geo + bundle siblings). */
+  const mapSensorsCount = computed(() => {
+    if (mapState.currentProvider.value === "realtime") {
+      return collectHeaderSensorIds([sensors.value]);
+    }
+    return collectHeaderSensorIds([sensors.value, sensorsNoLocation.value]);
   });
 
   const clusterSensorsByOwnerProximity = (items, maxKm = OWNER_GEO_CLUSTER_KM) => {
@@ -2809,11 +2817,10 @@ export function useSensors(localeComputed) {
 
     // Получаем список сенсоров для обоих режимов
     try {
-      const fetchProvider = provider === "realtime" ? "remote" : provider;
       const { sensors: sensorsData, sensorsNoLocation: sensorsNoLocationData } = await getSensors(
         start,
         end,
-        fetchProvider
+        mapState.currentProvider.value
       );
 
       // Проверяем, не был ли запрос отменен

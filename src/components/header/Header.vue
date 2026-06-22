@@ -13,7 +13,7 @@
         >
           <summary class="sensors-counter">
             <IconSensor class="sensors-mainicon" />
-            {{ mapSensorsCountDisplay + mapNoLocationCount }}
+            {{ mapSensorsCountDisplay }}
           </summary>
           <div class="details-content nogeo">
             <section>
@@ -173,7 +173,6 @@ import { useRoute, useRouter } from "vue-router";
 import { useMap } from "@/composables/useMap";
 import { useBookmarks } from "@/composables/useBookmarks";
 import { useSensors } from "@/composables/useSensors";
-import { dedupeSensorsForMap } from "@/utils/map/sensors/requests";
 
 import IconSensor from "../icons/Sensor.vue";
 import ReleaseInfo from "../ReleaseInfo.vue";
@@ -221,12 +220,10 @@ const filterSensors = (sensors) => {
 
 const sensorsNoLocation = computed(() => filterSensors(sensorsData.sensorsNoLocation));
 
-/** No-geo rows in the counter total (owner-deduped). */
-const mapNoLocationCount = computed(
-  () => dedupeSensorsForMap(sensorsNoLocation.value || []).length
-);
+/** No-geo sensors in the counter total (each device row). */
+const mapNoLocationCount = computed(() => (sensorsNoLocation.value || []).length);
 
-/** Always owner-bundled map dots (single source: useSensors). */
+/** Total sensors with geo from the loaded list (single source: useSensors). */
 const mapSensorsCountDisplay = computed(() => sensorsData.mapSensorsCount ?? 0);
 
 // Количество закладок

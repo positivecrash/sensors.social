@@ -1,26 +1,52 @@
-v4.0.5
+## v4.1.0
 
-**Owner bundling (map & popup):**
+### One map marker for nearby owner devices
 
-When one person runs several Altruist modules (e.g. **Urban** outdoors + **Insight** indoors) at the same place, the map used to show **two separate dots** for the same owner. Now those devices are **bundled into one dot** on the map if they are within **5 km** of each other — so two (or more) devices at home become **one marker**, not two. If the same owner has sensors in **different cities** (farther than 5 km), they still get **separate markers** — bundling is per location, not per owner globally.
+**Viewing data from your own sensors is now easier and more pleasant**
 
-- Feat: **One map marker per owner cluster** (within 5 km) instead of one dot per device ID
-- Feat: The visible dot prefers **Urban** as the cluster representative; **Insight** readings are still used behind the scenes (e.g. **CO₂** color and max values on that single marker)
-- Feat: Clicking the bundled dot opens the popup as before; an **owner device selector** lists every sibling in the cluster that has data (Urban, Insight, etc.) so you can switch which device you are viewing
+Sensors that share the same Robonomics owner and sit within 3 km of each other are shown as one map marker instead of one dot per device ID. If the same owner has devices farther apart (e.g. in different cities), they keep separate markers — bundling is per location, not per owner globally.
 
-**Header sensor counter:**
+This works for any owned sensors on the Robonomics network, including DIY builds, but is especially useful when one person runs several **[Altruist Air Quality Sensors](https://cyberpunks.shop)** — for example Urban outdoors and Insight indoors at the same place.
 
-- Feat: Counter reflects **owner-bundled map dots**, not raw device rows
-- Feat: **Daily recap** — everyone who reported at least once today (remote API)
-- Feat: **Realtime** — live badge for clusters that **published on pubsub this session**; count grows as the network wakes up
-- Feat: Realtime map is **seeded from today’s API** for fast markers; the badge tracks live pubsub separately
+### Device icons on map markers
 
-**Bug fixes:**
+**Finding the sensor you need is quicker at a glance.**
 
-- Fix: Duplicate map dots when switching **Day ↔ Realtime** or **Urban ↔ Insight**
-- Fix: **CO₂** map colors for bundled Urban markers (hydrate from Insight sibling in owner bundle)
+To make the map easier and more pleasant to read, each marker now shows its device type — Urban, Insight, DIY, and so on.
 
-v4.0.4
+### More informative sensor health warnings
+
+**You can now see exactly which readings our algorithm flagged as unreliable.**
+
+The warning has a cleaner design, appears only when the chart shows suspect data for the active tab, and the popup names the specific metrics that may be wrong.
+
+### Dynamic sensor addresses
+
+**Chart tooltips can now show the address for each reading.**
+
+If a sensor moved during the period you are viewing (day, week, or month), the tooltip shows where each measurement was taken. The popup header uses the address from the sensor’s latest location.
+
+### Unique meta tags when sharing
+
+**Share a sensor page on social media or in messages with richer link previews.**
+
+The page title includes the sensor’s address (or a short device ID), and the description names the measurement type you are viewing.
+
+### Removed old export
+
+**New upgraded export will come in next releases.**
+
+The old export was not very useful it was global and hard to use.
+
+### Tech note
+
+- Fix: Address cashed and didn't changed after geo changing
+- Feat: RosMan v2 migration
+- Refactor: API requests reduced
+- Refactor: IndexedDB rebuilt structure for better functionallity. Accounts, Sensors was retouched.
+
+
+## v4.0.4
 
 **Stories (new):**
 

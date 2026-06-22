@@ -260,12 +260,20 @@ const onRealtimePoint = async (point) => {
       .map((item) => {
         const ts = Number(item?.timestamp);
         if (!Number.isFinite(ts) || !item?.data) return null;
-        return { timestamp: ts, data: item.data };
+        const entry = { timestamp: ts, data: item.data };
+        if (hasValidCoordinates(item?.geo)) entry.geo = item.geo;
+        return entry;
       })
       .filter(Boolean);
     const ts = Number(point?.timestamp);
     const entry =
-      Number.isFinite(ts) && point?.data ? { timestamp: ts, data: point.data } : null;
+      Number.isFinite(ts) && point?.data
+        ? {
+            timestamp: ts,
+            data: point.data,
+            ...(hasValidCoordinates(point?.geo) ? { geo: point.geo } : null),
+          }
+        : null;
     const nextLogs =
       entry && !prevLogs.some((item) => item.timestamp === entry.timestamp)
         ? [...prevLogs, entry]
