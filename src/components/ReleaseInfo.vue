@@ -1,12 +1,8 @@
 <template>
   <section>
     <p>
-      <a
-        href="https://github.com/airalab/sensors.robonomics.network"
-        target="_blank"
-        rel="noopener"
-      >
-        <b>{{ repoName }} {{ latestRelease }}</b>
+      <a :href="releasesUrl" target="_blank" rel="noopener">
+        <b>{{ repoName }} {{ releaseTag }}</b>
       </a>
     </p>
     <div>
@@ -17,21 +13,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from "vue";
+import { computed } from "vue";
 import { settings } from "@config";
-import { fetchLatestGithubRelease } from "@/utils/githubRelease";
+import { version } from "../../package.json";
 
-const repoName = ref(settings.REPO_NAME);
-const latestRelease = ref("loading...");
-
-onMounted(async () => {
-  try {
-    latestRelease.value = await fetchLatestGithubRelease(repoName.value);
-  } catch (e) {
-    console.error("Error fetching latest release:", e);
-    latestRelease.value = "";
-  }
-});
+const repoName = settings.REPO_NAME;
+const releaseTag = computed(() => `v${version}`);
+const releasesUrl = computed(() => `https://github.com/${repoName}/releases/tag/v${version}`);
 </script>
 
 <style scoped>
