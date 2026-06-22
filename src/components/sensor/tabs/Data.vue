@@ -344,20 +344,15 @@ function buildUnitsList() {
   return Array.from(set).sort();
 }
 
-// Обновляем units при изменении логов
+// Обновляем units при смене датчика или логов
 watch(
-  () => props.log,
-  (newLogs) => {
-    if (!Array.isArray(newLogs) || newLogs.length === 0) {
+  () => [props.point?.sensor_id, props.log],
+  () => {
+    if (!Array.isArray(props.log) || props.log.length === 0) {
       units.value = [];
       return;
     }
-
-    const nextUnits = buildUnitsList();
-    const prevUnits = units.value;
-    const changed =
-      nextUnits.length !== prevUnits.length || nextUnits.some((u, i) => u !== prevUnits[i]);
-    if (changed) units.value = nextUnits;
+    units.value = buildUnitsList();
   },
   { immediate: true }
 );

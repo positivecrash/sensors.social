@@ -110,11 +110,6 @@ const clearLegendCache = () => {
 
 const UNITS_FOUND = ref(new Set());
 
-function isMapFilterUnit(unit) {
-  const cur = String(unit || "").toLowerCase();
-  return Boolean(cur && unitsettings[cur]);
-}
-
 function isMapUnitAvailableInData(unit, ids) {
   const cur = String(unit || "").toLowerCase();
   if (!cur || !ids?.size) return false;
@@ -166,24 +161,6 @@ const visibleLegend = computed(() => {
     }
   });
 
-  const mapUnit = String(mapState.currentUnit.value || "").toLowerCase();
-  const mapGroup = GROUPS_LOOKUP[mapUnit];
-  if (mapGroup && unitsettings[mapUnit] && !legend.some((x) => x.key === mapGroup)) {
-    legend.push({ key: mapGroup, labelKey: GROUPS[mapGroup].labelKey, single: false });
-  } else if (
-    !mapGroup &&
-    mapUnit &&
-    unitsettings[mapUnit] &&
-    !legend.some((x) => x.key === mapUnit)
-  ) {
-    const settings = unitsettings[mapUnit];
-    const labelKey =
-      settings?.namelong?.[locale.value] ||
-      settings?.nameshort?.[locale.value] ||
-      mapUnit.toUpperCase();
-    legend.push({ key: mapUnit, labelKey, single: true });
-  }
-
   return legend;
 });
 
@@ -191,16 +168,11 @@ const visibleLegend = computed(() => {
 const activeLegendKey = computed(() => {
   const cur = String(mapState.currentUnit.value || "").toLowerCase();
   const currentGroup = GROUPS_LOOKUP[cur];
-  if (currentGroup) {
-    if (visibleLegend.value.some((x) => x.key === currentGroup)) return currentGroup;
-    if (unitsettings[cur]) return currentGroup;
+  if (currentGroup && visibleLegend.value.some((x) => x.key === currentGroup)) return currentGroup;
+
+  if (!currentGroup && UNITS_FOUND.value.has(cur) && visibleLegend.value.some((x) => x.key === cur)) {
+    return cur;
   }
-
-  const isSingle = !currentGroup && UNITS_FOUND.value.has(cur);
-  if (isSingle && visibleLegend.value.some((x) => x.key === cur)) return cur;
-
-  // Map filter: keep legend on selected unit while logs load.
-  if (!currentGroup && cur && unitsettings[cur]) return cur;
 
   return visibleLegend.value[0]?.key || null;
 });
@@ -1241,22 +1213,20 @@ watch(
 watch(
   () => safeLog.value,
   (newLog) => {
-    // Обновляем список найденных единиц измерения
-    if (newLog.length) {
-      const newUnits = new Set();
-      for (const point of newLog) {
-        if (!point.data) continue;
-        Object.keys(point.data).forEach((id) => newUnits.add(id.toLowerCase()));
-      }
-
-      // Обновляем только если изменился состав единиц
-      const oldUnits = UNITS_FOUND.value;
-      if (newUnits.size !== oldUnits.size || [...newUnits].some((id) => !oldUnits.has(id))) {
-        UNITS_FOUND.value = newUnits;
-      }
+    if (!newLog.length) {
+      UNITS_FOUND.value = new Set();
+      seriesCache.clear();
+      if (chartRef.value) clearChartInstantly();
+      return;
     }
 
-    // Обновляем график для remote режима
+    const newUnits = new Set();
+    for (const point of newLog) {
+      if (!point.data) continue;
+      Object.keys(point.data).forEach((id) => newUnits.add(id.toLowerCase()));
+    }
+    UNITS_FOUND.value = newUnits;
+
     if (!isRealtime.value) {
       updateChart(newLog);
     }
@@ -1280,9 +1250,6 @@ watch(
     // Check if current unit is available
     const curAvailable = isMapUnitAvailableInData(cur, ids);
     if (curAvailable) return;
-
-    // Honor map-selected metric while popup opens the matching bundle device / logs load.
-    if (isMapFilterUnit(cur)) return;
 
     // Find first available parameter by checking groups in order
     let next = null;

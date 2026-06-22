@@ -3031,9 +3031,7 @@ export function useSensors(localeComputed) {
       owner: nextOwner ? String(nextOwner) : undefined,
     });
 
-    if (mapState.currentProvider.value === "remote") {
-      clearSensorLogs();
-    }
+    clearSensorLogs();
 
     void ensureOwnerLoaded(next);
     void (async () => {
